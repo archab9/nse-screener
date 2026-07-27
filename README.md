@@ -42,7 +42,7 @@ The desktop app is the intended interface — a single **Generate Results** butt
 only trigger. No scheduler, no background timer.
 
 ```bash
-python -m nse_screener.gui.app
+python run_app.py
 ```
 
 Upload your Chartink scan export with the **Upload CSV...** button, pick the fundamentals
