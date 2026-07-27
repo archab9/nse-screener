@@ -2,10 +2,11 @@
 
 A two-stage screener for stocks listed on India's National Stock Exchange (NSE).
 
-**Stage 1** — a Chartink momentum/volume scan narrows the NSE universe to breakout-day
-candidates. **Stage 2** — each survivor is scored against seven weighted fundamental
-parameters built from a manually-exported Screener.in dataset, then tiered and ranked.
-Sector tailwind is reported as a separate flag, never folded into the score.
+**Stage 1** — you upload a Chartink momentum/volume scan export, which narrows the NSE
+universe to breakout-day candidates. **Stage 2** — each survivor is scored against seven
+weighted fundamental parameters pulled live from Screener.in using your Premium login,
+then tiered and ranked. Sector tailwind is reported as a separate flag, never folded into
+the score.
 
 ## Status
 
@@ -13,14 +14,14 @@ The engine runs end to end against stub fundamentals. What is built:
 
 | Piece | State |
 |---|---|
-| Stage 1 — manual Chartink CSV import | Working |
-| Stage 1 — scripted POST to `chartink.com/screener/process` | Built; scan clause needs confirming (see below) |
+| Stage 1 — Chartink CSV upload | Working |
+| Stage 2 — live Screener.in fetch (your Premium login) | Working; parser verified against live pages |
+| Stage 2 — saved local export (fallback) | Working |
 | Stage 2 — P1–P8 parameter rules | Working |
-| Scoring engine — toggles, percentage tiering, no hard gate | Working, 86 tests |
+| Scoring engine — toggles, percentage tiering, no hard gate | Working, 113 tests |
 | PyQt6 desktop GUI | Working |
 | Kite Connect — token check, quotes, historical | Built; needs your API key to exercise |
 | Backtest — pandas forward-return study | Working |
-| Real Screener.in export format | **Stubbed** — see "Open items" |
 
 ## Setup
 
@@ -28,7 +29,8 @@ The engine runs end to end against stub fundamentals. What is built:
 python -m venv .venv && .venv/Scripts/pip install -r requirements.txt
 ```
 
-Generate the stub fundamentals dataset (invented values, for testing the engine):
+Generate the stub fundamentals dataset used by `--source local` and the demo (invented
+values, for exercising the engine without hitting Screener.in):
 
 ```bash
 python scripts/make_sample_data.py
@@ -43,10 +45,13 @@ only trigger. No scheduler, no background timer.
 python -m nse_screener.gui.app
 ```
 
+Upload your Chartink scan export with the **Upload CSV...** button, pick the fundamentals
+source, and press Generate Results.
+
 A headless CLI is available for testing the pipeline:
 
 ```bash
-python run_screener.py --off P5 P7
+python run_screener.py --source local --off P5 P7
 ```
 
 ## How scoring works
@@ -73,44 +78,56 @@ financial facts; P8 is a forward macro call. It is reported as a separate Yes/No
 
 ## Data sources
 
-Chartink (free) and Screener.in Premium are the only data subscriptions. Kite Connect
-(₹500/month) supplies live quotes and historical OHLCV — it has no fundamentals fields.
+**Stage 1 — Chartink, manual CSV upload.** You run the scan in Chartink and export the
+CSV; the app reads that file. There is no scripted Chartink access and no scan clause in
+this repo.
 
-Two deliberate, permanent constraints:
+**Stage 2 — Screener.in, live via your own Premium login.** The app signs in with your
+credentials and reads company pages directly. A saved local export remains selectable as a
+fallback, and you want it: this is scraped markup, not an API, so selectors will eventually
+break. When they do, switch the source to `local` and the screener keeps working.
 
-- **Screener.in is never scripted.** Export CSVs manually from your own logged-in browser
-  session; the code only ever reads files already on disk. Export is a feature built for a
-  human clicking a button, and fundamentals only move quarterly anyway.
-- **Chartink needs no login.** The scan clause is a filter definition, not private account
-  data, so the scripted mode POSTs it with a CSRF token exactly as an anonymous visitor's
-  browser does.
+**Kite Connect** (₹500/month) supplies live quotes and historical OHLCV. It carries no
+fundamentals fields.
 
-Kite is the only credential in the pipeline. It lives in Windows Credential Manager (via
-`keyring`) or an environment variable — never in this repo.
+### What's parsed from a Screener.in company page
+
+| Field | Source on the page |
+|---|---|
+| Market cap, P/E, book value, dividend yield | `#top-ratios` summary box |
+| Quarterly sales and net profit | `#quarters` |
+| Annual PAT | `#profit-loss` |
+| CFO, free cash flow (capex derived) | `#cash-flow` |
+| ROCE %, debtor days | `#ratios` |
+| **ROE (derived)** | `#balance-sheet` — Screener publishes ROCE per year but not ROE, so it's computed as PAT ÷ (equity capital + reserves) |
+| Promoter / FII / DII / government % | `#shareholding` |
+| Blended EPS growth | mean of 3-year and 5-year compounded profit growth |
+| Industry hierarchy | nested `/market/` links, broad → specific |
+
+Two fields are **not** available and are handled as missing rather than guessed:
+promoter **pledge %** (absent from the shareholding table, so P6's pledge flag never
+fires on live data) and per-year ROE as published (derived instead, as above).
+
+### Credentials
+
+Screener.in and Kite credentials live in Windows Credential Manager via `keyring`, or in
+environment variables. Never in this repo. The Screener.in password is entered in the
+app's own dialog and sent only to screener.in.
 
 ## Refresh cadence
 
-Fundamentals change when companies report, roughly every 90 days. Re-export from
-Screener.in about four times a year, after each results season. Price, volume, and any
-ratio built on today's price come from Kite and refresh on every run. The app warns if the
-export on disk is more than 100 days old.
+In live mode fundamentals are fetched fresh on every run, so there is nothing to refresh.
+In local mode the app warns if the saved export is more than 100 days old — a newer
+quarter has probably reported by then.
 
 ## Open items
 
-These need your input before the screener is trustworthy on real money:
-
-1. **NSE 2026 holiday list** — `config/nse_holidays_2026.json` is intentionally empty. The
-   spec says 19 holidays but doesn't list them, and inventing an exchange calendar would
-   silently mis-date results. Until filled, only weekends are detected and the app shows a
-   warning banner.
-2. **Chartink scan clause** — `SCAN_CLAUSE` in `src/nse_screener/stage1/chartink.py` is
-   reconstructed from the seven conditions in the spec. Copy the real text from your saved
-   scan's syntax view and paste it over.
-3. **Screener.in export format** — the loader reads a documented four-CSV schema
-   (`company`, `quarterly`, `annual`, `shareholding`). Send one real export and the adapter
-   gets written against it.
-4. **Sector-leader universe** — P8's "top 3 by market cap" is only as good as the peer set
-   in the export. Scoring against a shortlist-only export flags the rank as provisional.
+1. **Sector-leader universe** — P8's "top 3 by market cap" is only as good as the peer set
+   available. Ranking against the stage-1 shortlist alone flags itself provisional.
+2. **NSE sector index PE/PB** — `data/nse/sector_index_valuation.csv` currently holds
+   placeholder values. P7's PB check is only as good as that file.
+3. **Scrape fragility** — the parser is verified against live pages today. Expect to
+   revisit `screener_client.py` when Screener.in changes its markup.
 
 ## Testing
 

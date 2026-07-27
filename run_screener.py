@@ -3,10 +3,11 @@
 Useful for testing the engine without the GUI. The GUI (gui/app.py) is the intended
 day-to-day interface per spec section 10.
 
-    python run_screener.py                 # manual CSV mode, no Kite
-    python run_screener.py --mode scripted # POST to Chartink
-    python run_screener.py --kite          # include live quote check
-    python run_screener.py --off P5 P7     # toggle parameters off
+    python run_screener.py                      # configured CSV + configured source
+    python run_screener.py --source local       # use a saved export instead of live
+    python run_screener.py --csv "scan.csv"     # a specific Chartink export
+    python run_screener.py --kite               # include the live quote check
+    python run_screener.py --off P5 P7          # toggle parameters off
 """
 
 from __future__ import annotations
@@ -25,7 +26,10 @@ from nse_screener.scoring import score_all  # noqa: E402
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Two-stage NSE equity screener")
-    parser.add_argument("--mode", choices=["manual", "scripted"], default=None)
+    parser.add_argument("--csv", default=None, metavar="PATH",
+                        help="Chartink scan export (defaults to the configured path)")
+    parser.add_argument("--source", choices=["live", "local"], default=None,
+                        help="fundamentals from Screener.in live, or a saved export")
     parser.add_argument("--kite", action="store_true", help="enable the live quote check")
     parser.add_argument("--off", nargs="*", default=[], metavar="PARAM",
                         help=f"parameters to switch off, from {list(PARAM_IDS)}")
@@ -42,7 +46,9 @@ def main() -> int:
         if not args.quiet:
             print(f"[{pct:>3}%] {message}", file=sys.stderr)
 
-    result = run_pipeline(mode=args.mode, progress=progress, use_kite=args.kite)
+    result = run_pipeline(
+        chartink_csv=args.csv, data_source=args.source, progress=progress, use_kite=args.kite
+    )
     ranked = score_all(result.stocks, toggles)
     print(format_report(ranked, result.context, toggles))
     return 0

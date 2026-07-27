@@ -152,8 +152,8 @@ class RunContext:
     """Everything the GUI needs to describe the run it is showing."""
 
     run_at: date
+    # Date the displayed data reflects - the Chartink export's date, not a market calendar.
     as_of_trading_day: date | None = None
-    is_trading_day: bool = True
     warnings: list[RunWarning] = field(default_factory=list)
     stage1_count: int = 0
     fundamentals_age_days: int | None = None

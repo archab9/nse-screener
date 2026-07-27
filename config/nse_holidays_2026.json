@@ -1,9 +1,0 @@
-{
-  "_comment": "NSE trading holidays, equity segment. Spec section 10 says 19 scheduled in 2026 excluding weekends, but does NOT list the dates - so they are NOT filled in here. Inventing an exchange calendar from memory would silently mis-date results.",
-  "_how_to_fill": "Copy from the official NSE holiday list (nseindia.com > Resources > Exchange Communication > Holidays) or Zerodha's published calendar. Add each as YYYY-MM-DD. Refresh once a year (spec section 10).",
-
-  "year": 2026,
-  "verified": false,
-  "expected_count": 19,
-  "holidays": []
-}

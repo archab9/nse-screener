@@ -87,6 +87,11 @@ class CompanyFundamentals:
     symbol: str
     name: str = ""
     industry: str = ""
+    # Full Screener.in classification chain, e.g.
+    # "Energy > Oil, Gas & Consumable Fuels > Petroleum Products > Refineries & Marketing".
+    # Sector matching runs against this when present, so a keyword can hit any level of the
+    # hierarchy rather than only the most specific label.
+    industry_path: str = ""
     market_cap_cr: float | None = None
     pe: float | None = None
     pb: float | None = None
@@ -106,6 +111,11 @@ class CompanyFundamentals:
 
     def sorted_shareholding(self) -> list[ShareholdingPoint]:
         return sorted(self.shareholding, key=lambda s: s.sort_key)
+
+    @property
+    def classification_text(self) -> str:
+        """What sector/industry keyword matching should be run against."""
+        return self.industry_path or self.industry
 
 
 @dataclass
@@ -131,41 +141,58 @@ class FundamentalsError(RuntimeError):
     pass
 
 
-# Ordered most-specific first: 'YYYY-Qn', then 'Qn YYYY', then a bare year.
-_QUARTER_PATTERNS = (
-    (re.compile(r"^(\d{4})[-_\s]?Q([1-4])$"), ("year", "quarter")),
-    (re.compile(r"^Q([1-4])[-_\s]?(\d{4})$"), ("quarter", "year")),
-    (re.compile(r"^(\d{4})$"), ("year",)),
-)
-
-_MONTH_TO_QUARTER = {
-    "MAR": 4, "JUN": 1, "SEP": 2, "DEC": 3,  # Indian FY: Apr-Mar, so Jun is Q1
-}
+_ISO_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
+_YEAR_Q_RE = re.compile(r"^(\d{4})[-_\s]?Q([1-4])$")
+_Q_YEAR_RE = re.compile(r"^Q([1-4])[-_\s]?(\d{4})$")
+_YEAR_RE = re.compile(r"^(\d{4})$")
 _MONTH_YEAR_RE = re.compile(r"^([A-Z]{3})[-_\s]?(\d{4})$")
+
+_MONTHS = {
+    "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4, "MAY": 5, "JUN": 6,
+    "JUL": 7, "AUG": 8, "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12,
+}
 
 
 def _quarter_sort_key(label: str) -> tuple[int, int]:
-    """Parse a quarter label into a sortable (year, quarter).
+    """Parse a period label into a chronologically sortable (year, month).
 
-    Handles 'YYYY-Qn', 'YYYYQn', 'Qn YYYY', a bare 'YYYY', and Screener.in's
-    'Mmm YYYY' column headers. Unparseable labels sort first as (0, 0) rather than
-    producing a nonsense key that would silently reorder a company's history.
+    Every supported format normalises onto the SAME (year, month) scale so that mixed
+    sources still order correctly:
+
+        '2024-03-31'  (Screener.in data-date-key)  -> (2024, 3)
+        'Mar 2024'    (Screener.in column header)  -> (2024, 3)
+        '2024-Q1'     (local CSV schema)           -> (2024, 3)
+        '2024'        (annual)                     -> (2024, 12)
+
+    Quarter numbers map to the month the quarter ENDS in, which is what makes the scales
+    interchangeable. An earlier version mapped month names onto Indian fiscal-year quarter
+    numbers instead (Jun -> Q1, Mar -> Q4); that ordered Mar 2024 after Jun 2024 and
+    silently scrambled every company's history.
+
+    Unparseable labels sort first as (0, 0) rather than producing a nonsense key.
     """
     text = (label or "").strip().upper()
-    for pattern, fields in _QUARTER_PATTERNS:
-        match = pattern.match(text)
-        if not match:
-            continue
-        values = dict(zip(fields, (int(g) for g in match.groups())))
-        return (values.get("year", 0), values.get("quarter", 4))
 
-    month_match = _MONTH_YEAR_RE.match(text)
-    if month_match:
-        month, year = month_match.group(1), int(month_match.group(2))
-        if month in _MONTH_TO_QUARTER:
-            quarter = _MONTH_TO_QUARTER[month]
-            # Mar closes the FY that began the previous April.
-            return (year, quarter)
+    match = _ISO_RE.match(text)
+    if match:
+        return (int(match.group(1)), int(match.group(2)))
+
+    match = _YEAR_Q_RE.match(text)
+    if match:
+        return (int(match.group(1)), int(match.group(2)) * 3)
+
+    match = _Q_YEAR_RE.match(text)
+    if match:
+        return (int(match.group(2)), int(match.group(1)) * 3)
+
+    match = _MONTH_YEAR_RE.match(text)
+    if match and match.group(1) in _MONTHS:
+        return (int(match.group(2)), _MONTHS[match.group(1)])
+
+    match = _YEAR_RE.match(text)
+    if match:
+        return (int(match.group(1)), 12)
+
     return (0, 0)
 
 
@@ -218,6 +245,7 @@ def load_fundamentals(directory: Path | str | None = None) -> FundamentalsStore:
             symbol=symbol,
             name=row.get("name", "").strip(),
             industry=row.get("industry", "").strip(),
+            industry_path=row.get("industry_path", "").strip(),
             market_cap_cr=_num(row.get("market_cap_cr")),
             pe=_num(row.get("pe")),
             pb=_num(row.get("pb")),

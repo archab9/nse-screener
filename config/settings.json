@@ -7,9 +7,15 @@
     "sector_index_csv": "data/nse/sector_index_valuation.csv"
   },
 
+  "stage2": {
+    "source": "live",
+    "_source_options": ["live", "local"],
+    "_source_note": "live = fetch from Screener.in with the stored login. local = read a previously-saved export from paths.fundamentals_dir. Live is the default at the user's direction; local remains the fallback when scraped selectors break.",
+    "consolidated": true
+  },
+
   "stage1": {
-    "mode": "manual",
-    "_mode_options": ["manual", "scripted"],
+    "_ingestion_note": "Manual Chartink CSV upload only. The scripted POST to /screener/process was removed at the user's direction.",
     "min_close": 30,
     "min_pct_change": 6.5,
     "volume_sma_multiple": 3,

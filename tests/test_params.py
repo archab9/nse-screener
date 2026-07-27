@@ -265,11 +265,26 @@ class TestQuarterParsing:
         assert _quarter_sort_key("Q3 2024") == _quarter_sort_key("2024-Q3")
         assert _quarter_sort_key("Q3-2024") == _quarter_sort_key("2024-Q3")
 
-    def test_screener_month_year_headers(self):
-        """Screener.in exports quarterly columns as 'Sep 2024' style headers."""
-        assert _quarter_sort_key("Jun 2024") < _quarter_sort_key("Sep 2024")
-        assert _quarter_sort_key("Sep 2024") < _quarter_sort_key("Dec 2024")
-        assert _quarter_sort_key("Dec 2024") < _quarter_sort_key("Mar 2024")
+    def test_screener_month_year_headers_sort_chronologically(self):
+        """Screener.in renders quarter columns as 'Sep 2024'.
+
+        Regression: an earlier version mapped month names onto Indian fiscal-year quarter
+        numbers (Jun -> Q1 ... Mar -> Q4), which put Mar 2024 AFTER Dec 2024 and silently
+        scrambled every company's history. Ordering must be plain calendar order.
+        """
+        labels = ["Mar 2024", "Jun 2024", "Sep 2024", "Dec 2024", "Mar 2025"]
+        assert sorted(labels, key=_quarter_sort_key) == labels
+
+    def test_iso_date_keys_from_the_live_page(self):
+        """Screener.in column headers carry data-date-key='YYYY-MM-DD'."""
+        keys = ["2024-03-31", "2024-06-30", "2024-09-30", "2024-12-31", "2025-03-31"]
+        assert sorted(keys, key=_quarter_sort_key) == keys
+
+    def test_formats_share_one_comparable_scale(self):
+        """ISO, 'Mmm YYYY' and 'YYYY-Qn' must all land on the same (year, month) scale."""
+        assert _quarter_sort_key("2024-03-31") == _quarter_sort_key("Mar 2024")
+        assert _quarter_sort_key("Mar 2024") == _quarter_sort_key("2024-Q1")
+        assert _quarter_sort_key("2024-12-31") == _quarter_sort_key("2024-Q4")
 
     def test_unparseable_label_sorts_first_rather_than_scrambling_history(self):
         assert _quarter_sort_key("garbage") == (0, 0)

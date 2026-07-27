@@ -106,6 +106,11 @@ def _is_capital_intensive(industry: str) -> bool:
     return any(term in needle for term in sector_map()["capital_intensive_industries"])
 
 
+def _classification_of(company: CompanyFundamentals) -> str:
+    """Prefer the full Screener.in hierarchy over the leaf label when both are present."""
+    return company.classification_text
+
+
 def evaluate_p2(company: CompanyFundamentals) -> ParamResult:
     """Capital efficiency - ROCE/ROE on 4-of-5 logic, with a leverage cross-check."""
     cfg = settings()["p2_capital_efficiency"]
@@ -116,7 +121,7 @@ def evaluate_p2(company: CompanyFundamentals) -> ParamResult:
     if len(roce) < 3 or len(roe) < 3:
         return _unknown("P2", f"Need 3+ years of ROCE and ROE, have {len(roce)}/{len(roe)}.")
 
-    capital_intensive = _is_capital_intensive(company.industry)
+    capital_intensive = _is_capital_intensive(_classification_of(company))
     roce_bar = (
         cfg["roce_min_pct_capital_intensive"] if capital_intensive else cfg["roce_min_pct"]
     )
@@ -439,7 +444,7 @@ def evaluate_p7(
         )
 
     pegy = company.pe / denominator
-    index_name = _sector_index_for(company.industry)
+    index_name = _sector_index_for(_classification_of(company))
     sector_pb = (sector_valuations.get(index_name) or {}).get("pb") or None
 
     latest_roce = next(
@@ -511,13 +516,13 @@ def evaluate_p8(
     exported, the peer set is not the full industry and the check is flagged as
     provisional rather than silently returning a wrong answer.
     """
-    sector = classify_tailwind_sector(company.industry)
+    sector = classify_tailwind_sector(_classification_of(company))
     if sector is None:
         return ParamResult(
             "P8",
             Verdict.NO,
             f"Industry '{company.industry or 'unknown'}' is not in the five tailwind sectors.",
-            {"Industry": company.industry},
+            {"Industry": company.classification_text or company.industry},
         )
 
     peers = industry_peers or []

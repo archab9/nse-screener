@@ -1,6 +1,9 @@
-"""Stage 1 - Chartink technical/volume screen (spec section 2)."""
+"""Stage 1 - Chartink technical/volume screen.
 
-from .csv_import import load_chartink_csv
-from .chartink import SCAN_CLAUSE, ChartinkError, run_scripted_scan
+Ingestion is manual CSV upload only. The scripted POST to chartink.com/screener/process
+was removed at the user's direction, along with the reconstructed scan clause.
+"""
 
-__all__ = ["load_chartink_csv", "run_scripted_scan", "SCAN_CLAUSE", "ChartinkError"]
+from .csv_import import Stage1CsvError, csv_age_days, load_chartink_csv
+
+__all__ = ["load_chartink_csv", "csv_age_days", "Stage1CsvError"]

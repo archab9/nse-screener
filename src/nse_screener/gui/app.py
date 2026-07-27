@@ -22,6 +22,8 @@ from PyQt6.QtGui import QAction, QColor, QFont, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QComboBox,
+    QFileDialog,
     QGroupBox,
     QHBoxLayout,
     QInputDialog,
@@ -44,11 +46,14 @@ from PyQt6.QtWidgets import (
 if __package__ in (None, ""):  # allow `python src/nse_screener/gui/app.py`
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from nse_screener.config import resolve_path
+from nse_screener.gui.login_dialog import ScreenerLoginDialog
 from nse_screener.market.kite import TokenState, build_login_url, check_token, complete_login
 from nse_screener.models import P8_ID, PARAM_IDS, PARAM_NAMES, RunContext, ScoredStock, Tier
-from nse_screener.pipeline import PipelineResult, run_pipeline
+from nse_screener.pipeline import LIVE, LOCAL, PipelineResult, run_pipeline
 from nse_screener.report import format_detail_card
 from nse_screener.scoring import score_all, summary_line
+from nse_screener.stage2.screener_client import has_credentials
 
 TIER_COLOURS = {
     Tier.ELITE_COMPOUNDER: "#1b5e20",
@@ -88,11 +93,13 @@ class ScreenerWindow(QMainWindow):
         self._result: PipelineResult | None = None
         self._ranked: list[ScoredStock] = []
         self._checkboxes: dict[str, QCheckBox] = {}
+        self._csv_path: Path | None = None
 
         root = QWidget()
         self.setCentralWidget(root)
         layout = QVBoxLayout(root)
 
+        layout.addWidget(self._build_sources())
         layout.addWidget(self._build_controls())
 
         self.banner_box = QVBoxLayout()
@@ -134,6 +141,74 @@ class ScreenerWindow(QMainWindow):
         self._build_tray()
 
     # ------------------------------------------------------------------ layout
+
+    def _build_sources(self) -> QWidget:
+        box = QGroupBox("Data sources")
+        outer = QVBoxLayout(box)
+
+        stage1 = QHBoxLayout()
+        stage1.addWidget(QLabel("Stage 1 - Chartink CSV:"))
+        self.csv_label = QLabel()
+        self.csv_label.setStyleSheet("color:#555;")
+        upload = QPushButton("Upload CSV...")
+        upload.clicked.connect(self._choose_csv)
+        stage1.addWidget(self.csv_label, stretch=1)
+        stage1.addWidget(upload)
+        outer.addLayout(stage1)
+
+        stage2 = QHBoxLayout()
+        stage2.addWidget(QLabel("Stage 2 - fundamentals:"))
+        self.source_combo = QComboBox()
+        self.source_combo.addItem("Live from Screener.in (Premium login)", LIVE)
+        self.source_combo.addItem("Saved local export", LOCAL)
+        self.source_combo.currentIndexChanged.connect(self._refresh_source_label)
+        stage2.addWidget(self.source_combo)
+
+        self.login_button = QPushButton("Screener.in login...")
+        self.login_button.clicked.connect(self._screener_login)
+        stage2.addWidget(self.login_button)
+
+        self.login_label = QLabel()
+        self.login_label.setStyleSheet("color:#555;")
+        stage2.addWidget(self.login_label, stretch=1)
+        outer.addLayout(stage2)
+
+        # Default to the configured CSV if it already exists, so the app is usable
+        # immediately without an upload step.
+        try:
+            default_csv = resolve_path("chartink_csv")
+            if default_csv.exists():
+                self._csv_path = default_csv
+        except (KeyError, OSError):
+            pass
+
+        self._refresh_source_label()
+        return box
+
+    def _choose_csv(self) -> None:
+        start = str(self._csv_path.parent) if self._csv_path else ""
+        path, _filter = QFileDialog.getOpenFileName(
+            self, "Select the Chartink scan export", start, "CSV files (*.csv);;All files (*)"
+        )
+        if path:
+            self._csv_path = Path(path)
+            self._refresh_source_label()
+
+    def _screener_login(self) -> None:
+        dialog = ScreenerLoginDialog(self)
+        if dialog.exec():
+            self._refresh_source_label()
+
+    def _refresh_source_label(self) -> None:
+        self.csv_label.setText(self._csv_path.name if self._csv_path else "none selected")
+        live = self.source_combo.currentData() == LIVE
+        self.login_button.setEnabled(live)
+        if not live:
+            self.login_label.setText("reading a saved export from disk")
+        elif has_credentials():
+            self.login_label.setText("credentials stored")
+        else:
+            self.login_label.setText("no credentials stored")
 
     def _build_controls(self) -> QWidget:
         box = QGroupBox("Parameters - toggling removes a parameter from the score AND the denominator")
@@ -205,6 +280,27 @@ class ScreenerWindow(QMainWindow):
 
     def generate(self) -> None:
         """The single trigger. Runs the whole pipeline synchronously."""
+        if self._csv_path is None or not self._csv_path.exists():
+            QMessageBox.warning(
+                self,
+                "No Chartink CSV",
+                "Upload the Chartink scan export first - it supplies the stage-1 ticker list.",
+            )
+            return
+
+        source = self.source_combo.currentData()
+        if source == LIVE and not has_credentials():
+            answer = QMessageBox.question(
+                self,
+                "Screener.in login needed",
+                "Live mode needs your Screener.in credentials. Sign in now?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if answer == QMessageBox.StandardButton.Yes:
+                self._screener_login()
+            if not has_credentials():
+                return
+
         if not self._ensure_kite_token():
             return
 
@@ -219,7 +315,9 @@ class ScreenerWindow(QMainWindow):
             QApplication.processEvents()  # keep the window responsive during the sync run
 
         try:
-            self._result = run_pipeline(progress=progress)
+            self._result = run_pipeline(
+                chartink_csv=self._csv_path, data_source=source, progress=progress
+            )
         except Exception as exc:  # a crash must not leave the user without an explanation
             self._add_banner("error", f"Pipeline failed: {exc}")
             self.status.setText("Run failed.")
