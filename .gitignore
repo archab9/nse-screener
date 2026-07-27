@@ -1,1 +1,21 @@
 .claude/settings.local.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# Data. Screener.in exports and Chartink scans are personal account output and are
+# regenerable - keep them out of the repo. Fixtures come from scripts/make_sample_data.py.
+data/
+
+# Credentials never belong here (spec section 9 - keyring or env vars only)
+.env
+*.token

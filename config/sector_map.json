@@ -1,0 +1,108 @@
+{
+  "_comment": "Screener.in 'Industry' is the canonical taxonomy (spec section 7). Matching is case-insensitive substring against that column. Refresh the tailwind list quarterly - spec section 3 calls it an explicit moving target.",
+
+  "_p2_exceptions_note": "CONFIRMED-IN-CHAT: broad capital-intensive set gets the relaxed ROCE >=10% bar.",
+  "capital_intensive_industries": [
+    "infrastructure",
+    "construction",
+    "power",
+    "utilities",
+    "electric utilities",
+    "capital goods",
+    "engineering",
+    "cement",
+    "metals",
+    "mining",
+    "steel",
+    "aluminium",
+    "telecom",
+    "realty",
+    "real estate",
+    "shipping",
+    "ports"
+  ],
+
+  "_tailwind_note": "Five sectors from spec section 3 P8. IT services deliberately excluded.",
+  "tailwind_sectors": {
+    "Private financials": [
+      "bank",
+      "private sector bank",
+      "nbfc",
+      "finance",
+      "housing finance",
+      "insurance",
+      "asset management"
+    ],
+    "Defense & strategic manufacturing": [
+      "defence",
+      "defense",
+      "aerospace",
+      "shipbuilding",
+      "explosives",
+      "ordnance"
+    ],
+    "Renewable & clean energy value chain": [
+      "renewable",
+      "solar",
+      "wind",
+      "battery",
+      "energy storage",
+      "power equipment",
+      "transmission",
+      "electrical equipment"
+    ],
+    "Capital goods & infrastructure": [
+      "capital goods",
+      "engineering",
+      "infrastructure",
+      "construction",
+      "cement",
+      "industrial machinery",
+      "abrasives"
+    ],
+    "Consumption discretionary": [
+      "auto",
+      "automobile",
+      "auto ancillary",
+      "consumer durables",
+      "appliances",
+      "retail",
+      "jewellery",
+      "footwear"
+    ]
+  },
+
+  "_excluded_note": "Excluded despite appearing on 2026 broker top-sector lists - structural AI repricing of labour-intensive services (spec section 3 P8).",
+  "excluded_sectors": [
+    "it services",
+    "software",
+    "information technology"
+  ],
+
+  "_sector_index_note": "Maps Screener.in industry to the NSE sectoral index used for the P7 PB benchmark.",
+  "nse_sector_index": {
+    "bank": "NIFTY BANK",
+    "finance": "NIFTY FINANCIAL SERVICES",
+    "nbfc": "NIFTY FINANCIAL SERVICES",
+    "insurance": "NIFTY FINANCIAL SERVICES",
+    "auto": "NIFTY AUTO",
+    "automobile": "NIFTY AUTO",
+    "auto ancillary": "NIFTY AUTO",
+    "pharmaceuticals": "NIFTY PHARMA",
+    "healthcare": "NIFTY PHARMA",
+    "fmcg": "NIFTY FMCG",
+    "consumer durables": "NIFTY CONSUMER DURABLES",
+    "metals": "NIFTY METAL",
+    "steel": "NIFTY METAL",
+    "mining": "NIFTY METAL",
+    "power": "NIFTY ENERGY",
+    "utilities": "NIFTY ENERGY",
+    "oil": "NIFTY OIL & GAS",
+    "gas": "NIFTY OIL & GAS",
+    "realty": "NIFTY REALTY",
+    "real estate": "NIFTY REALTY",
+    "software": "NIFTY IT",
+    "it services": "NIFTY IT"
+  },
+  "nse_sector_index_default": "NIFTY 500"
+}

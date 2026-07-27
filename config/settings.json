@@ -1,0 +1,94 @@
+{
+  "_comment": "Thresholds sourced from spec section 3 unless marked CONFIRMED-IN-CHAT (values the spec left open, decided by the user on 2026-07-27).",
+
+  "paths": {
+    "chartink_csv": "data/stage1/VOLUME SCAN.csv",
+    "fundamentals_dir": "data/fundamentals",
+    "sector_index_csv": "data/nse/sector_index_valuation.csv"
+  },
+
+  "stage1": {
+    "mode": "manual",
+    "_mode_options": ["manual", "scripted"],
+    "min_close": 30,
+    "min_pct_change": 6.5,
+    "volume_sma_multiple": 3,
+    "min_volume_sma_50": 25000,
+    "min_volume": 50000,
+    "min_promoter_holding_pct": 50,
+    "max_debt_to_equity": 1.25
+  },
+
+  "staleness": {
+    "fundamentals_max_age_days": 100
+  },
+
+  "p1_record_financials": {
+    "lookback_quarters": 20,
+    "revenue_cagr_min_pct": 12.0
+  },
+
+  "p2_capital_efficiency": {
+    "roce_min_pct": 15.0,
+    "roce_min_pct_capital_intensive": 10.0,
+    "roe_min_pct": 15.0,
+    "years_required": 4,
+    "years_window": 5,
+    "partial_band_low_pct": 12.0,
+    "partial_band_high_pct": 15.0,
+    "leverage_flag_roe_minus_roce_pp": 8.0,
+    "pricing_power_roce_pct": 25.0
+  },
+
+  "p3_fcf_quality": {
+    "years_window": 5,
+    "years_required_yes": 4,
+    "years_required_partial": 3,
+    "fcf_yield_min_pct": 2.0,
+    "fcf_yield_partial_low_pct": 1.0
+  },
+
+  "p4_earnings_quality": {
+    "cfo_pat_min": 0.8,
+    "years_required": 2,
+    "years_window": 3,
+    "partial_band_low": 0.6,
+    "receivable_days_yoy_flag_pct": 20.0
+  },
+
+  "p5_institutional": {
+    "lookback_quarters": 6,
+    "flat_tolerance_pct": 1.0,
+    "marquee_exit_drop_pct": 2.0
+  },
+
+  "p6_promoter": {
+    "holding_strong_pct": 50.0,
+    "stability_tolerance_pct": 2.0,
+    "single_quarter_drop_pct": 5.0,
+    "lookback_quarters": 4,
+    "pledge_risk_pct": 20.0
+  },
+
+  "p7_valuation": {
+    "_pegy_rule": "CONFIRMED-IN-CHAT: absolute PEGY <= 1.0. Spec said 'sector-index PE-derived benchmark' but NSE publishes no sector EPS growth, so no true sector PEGY is computable.",
+    "pegy_max": 1.0,
+    "pegy_max_high_growth": 1.5,
+    "high_growth_roce_pct": 20.0,
+    "_pb_band": "CONFIRMED-IN-CHAT: <= 1.25x the NSE sector index PB.",
+    "pb_sector_multiple_max": 1.25
+  },
+
+  "tiers": {
+    "_comment": "Percentage of ACTIVE maximum, never a fixed point total (spec section 4).",
+    "elite_compounder_min_pct": 90.0,
+    "quality_grower_min_pct": 70.0,
+    "watchlist_min_pct": 50.0
+  },
+
+  "kite": {
+    "api_key_env": "KITE_API_KEY",
+    "keyring_service": "nse-screener-kite",
+    "_credentials_note": "Never stored in this repo. Read from Windows Credential Manager via keyring, or from environment variables. See spec section 9."
+  }
+}
