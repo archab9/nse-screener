@@ -525,26 +525,33 @@ def evaluate_p8(
             {"Industry": company.classification_text or company.industry},
         )
 
-    peers = industry_peers or []
     flags: list[Flag] = []
-    rank = None
-    if peers and company.market_cap_cr:
-        ranked = sorted(
-            (p for p in peers if p.market_cap_cr),
-            key=lambda p: p.market_cap_cr or 0,
-            reverse=True,
-        )
-        for i, peer in enumerate(ranked, start=1):
-            if peer.symbol == company.symbol:
-                rank = i
-                break
-        if len(peers) < 10:
+    rank = company.industry_rank
+    peer_count = company.industry_peer_count
+    provisional = False
+
+    if rank is None:
+        # No authoritative industry table - fall back to whatever peers were loaded,
+        # and say so rather than presenting a shortlist rank as an industry rank.
+        peers = industry_peers or []
+        if peers and company.market_cap_cr:
+            ranked = sorted(
+                (p for p in peers if p.market_cap_cr),
+                key=lambda p: p.market_cap_cr or 0,
+                reverse=True,
+            )
+            for i, peer in enumerate(ranked, start=1):
+                if peer.symbol == company.symbol:
+                    rank = i
+                    break
+            peer_count = len(ranked)
+            provisional = True
             flags.append(
                 Flag(
                     "P8",
                     "partial_peer_universe",
-                    f"Sector-leader rank computed against only {len(peers)} exported peers, "
-                    f"not the full industry - treat as provisional",
+                    f"Rank computed against {len(ranked)} loaded peers, not the full "
+                    f"industry - treat as provisional",
                     "info",
                 )
             )
@@ -554,17 +561,21 @@ def evaluate_p8(
         "Tailwind sector": sector,
         "Industry": company.industry,
         "Market cap (cr)": company.market_cap_cr,
-        "Rank by market cap in exported peers": rank,
-        "Peers available": len(peers),
+        "Rank by market cap": rank,
+        "Companies in industry": peer_count,
+        "Rank source": "Screener.in industry table" if not provisional else "loaded peers only",
     }
 
     if is_leader:
-        return ParamResult("P8", Verdict.YES, f"{sector} - top-{rank} by market cap.", evidence, flags)
+        of = f" of {peer_count}" if peer_count else ""
+        return ParamResult(
+            "P8", Verdict.YES, f"{sector} - ranks #{rank}{of} by market cap.", evidence, flags
+        )
     if rank is None:
         return ParamResult(
             "P8",
             Verdict.PARTIAL,
-            f"In {sector} but sector-leader rank not computable from the exported universe.",
+            f"In {sector} but sector-leader rank could not be established.",
             evidence,
             flags,
         )

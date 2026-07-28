@@ -23,6 +23,21 @@
   ],
 
   "_tailwind_note": "Five sectors from spec section 3 P8. IT services deliberately excluded.",
+  "_tailwind_review": {
+    "last_reviewed": "2026-07-27",
+    "review_every_days": 90,
+    "_note": "This list is a human 3-year forward macro judgement, NOT something the app derives from live news. The app cannot forecast which sectors will lead; it only checks membership in this list plus a verifiable top-3-by-market-cap rank from Screener.in's own industry tables. Re-research quarterly and update both the list and last_reviewed."
+  },
+  "tailwind_rationale": {
+    "Private financials": "Credit-cycle upturn, GST-driven consumption, multiple brokerages overweight.",
+    "Defense & strategic manufacturing": "Strongest structural case of the five: ~32%/yr EPS growth forecast (Goldman Sachs, FY25-28), FY26 order approvals ~2x annual capex outlay. Valuations already rich - expect strong P8 but often weak P7, by design.",
+    "Renewable & clean energy value chain": "Policy-backed 500GW-by-2030 capacity target.",
+    "Capital goods & infrastructure": "Private capex flagged as a strong growth driver from late 2027 onward.",
+    "Consumption discretionary": "GST-rate-cut and income-tax-relief demand tailwind."
+  },
+  "excluded_rationale": {
+    "IT services": "Excluded despite appearing on some 2026 broker top-sector lists. Structural AI-driven repricing of the labour-intensive services model (Nifty IT down ~28% YTD 2026, revenue-hiring decoupling for the first time in the industry's history) outweighs the bull case for a 3-year structural pick."
+  },
   "tailwind_sectors": {
     "Private financials": [
       "bank",

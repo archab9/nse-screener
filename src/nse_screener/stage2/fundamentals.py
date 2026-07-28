@@ -103,6 +103,19 @@ class CompanyFundamentals:
     annual: list[AnnualPoint] = field(default_factory=list)
     shareholding: list[ShareholdingPoint] = field(default_factory=list)
 
+    # Narrative context shown on the detail card. All of it is quoted from Screener.in;
+    # nothing here is generated or inferred.
+    about: str = ""
+    key_points: list[str] = field(default_factory=list)
+    concall_summary: str = ""
+    concall_date: str = ""
+    concall_links: list[tuple[str, str, str]] = field(default_factory=list)  # (date, kind, url)
+
+    # Real industry ranking from Screener.in's /market/ table, not the shortlist.
+    industry_rank: int | None = None
+    industry_peer_count: int | None = None
+    industry_url: str = ""
+
     def sorted_quarterly(self) -> list[QuarterPoint]:
         return sorted(self.quarterly, key=lambda q: q.sort_key)
 

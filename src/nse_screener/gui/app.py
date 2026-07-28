@@ -1,14 +1,18 @@
-"""Windows desktop app (spec section 10).
+"""Windows desktop app.
 
-Design constraints taken directly from the spec:
+Design constraints carried through from the build spec:
   - A single "Generate Results" button is the ONLY trigger. No scheduler, no timer, no
     background runner.
   - The pipeline runs synchronously on that press, with a progress indicator.
   - Each of P1-P7 has its own checkbox, all ON by default. P8 gets a separate toggle,
     since it was never part of the score.
-  - Toggling recomputes and re-renders the table AND every detail card immediately,
-    without re-running the pipeline.
-  - Banners are never suppressed: stale fundamentals, missing Kite token, non-trading day.
+  - Toggling recomputes and re-renders immediately, without re-running the pipeline.
+  - Banners are never suppressed: stale fundamentals, missing credentials, fetch failures.
+
+Two kinds of live update, which are not the same thing:
+  - toggling a parameter only changes the arithmetic  -> re-score
+  - changing a threshold changes the verdicts         -> re-evaluate against cached data
+Neither ever re-fetches.
 """
 
 from __future__ import annotations
@@ -31,6 +35,7 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QMenu,
     QMessageBox,
+    QPlainTextEdit,
     QProgressBar,
     QPushButton,
     QScrollArea,
@@ -38,22 +43,30 @@ from PyQt6.QtWidgets import (
     QSystemTrayIcon,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
-if __package__ in (None, ""):  # allow `python src/nse_screener/gui/app.py`
+if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from nse_screener.config import resolve_path
+from nse_screener.gui.kite_dialog import KiteSettingsDialog
 from nse_screener.gui.login_dialog import ScreenerLoginDialog
+from nse_screener.gui.sectors_tab import SectorsTab
+from nse_screener.gui.thresholds_tab import ThresholdsTab
+from nse_screener.gui.watchlist_tab import WatchlistTab
 from nse_screener.market.kite import TokenState, build_login_url, check_token, complete_login
 from nse_screener.models import P8_ID, PARAM_IDS, PARAM_NAMES, RunContext, ScoredStock, Tier
-from nse_screener.pipeline import LIVE, LOCAL, PipelineResult, run_pipeline
+from nse_screener.pipeline import LIVE, LOCAL, PipelineResult, reevaluate, run_pipeline
 from nse_screener.report import format_detail_card
 from nse_screener.scoring import score_all, summary_line
+from nse_screener.sectors import is_sector_leader, leader_reason
+from nse_screener.stage1.symbols import hits_from_text, load_symbol_file
 from nse_screener.stage2.screener_client import has_credentials
+from nse_screener.watchlist import Watchlist, WatchState
 
 TIER_COLOURS = {
     Tier.ELITE_COMPOUNDER: "#1b5e20",
@@ -68,17 +81,24 @@ SEVERITY_STYLE = {
     "info": "background:#1565c0; color:white; padding:7px; border-radius:3px;",
 }
 
-COLUMNS = ["Ticker", "Sector", "Score", "Tier", "Tailwind", "PEGY", "PB", "Key flags"]
+LEADER_BG = QColor("#c8e6c9")   # tailwind sector AND top-3 by market cap
+LEADER_FG = QColor("#1b5e20")
+
+COLUMNS = [
+    "Ticker", "Sector", "Score", "Tier", "Tailwind",
+    "PEGY", "PB", "Watchlist", "Description", "Key flags",
+]
+COL_TAILWIND, COL_WATCH, COL_DESC = 4, 7, 8
+
+INPUT_CSV, INPUT_TXT, INPUT_MANUAL = "csv", "txt", "manual"
 
 
 def _make_icon() -> QIcon:
-    """Tray/window icon drawn in code so the .exe needs no external asset."""
     pixmap = QPixmap(64, 64)
     pixmap.fill(QColor("#1b5e20"))
     painter = QPainter(pixmap)
     painter.setPen(QColor("white"))
-    font = QFont("Segoe UI", 30, QFont.Weight.Bold)
-    painter.setFont(font)
+    painter.setFont(QFont("Segoe UI", 30, QFont.Weight.Bold))
     painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "S")
     painter.end()
     return QIcon(pixmap)
@@ -88,15 +108,36 @@ class ScreenerWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("NSE Two-Stage Screener")
-        self.resize(1350, 900)
+        self.resize(1500, 950)
 
         self._result: PipelineResult | None = None
         self._ranked: list[ScoredStock] = []
         self._checkboxes: dict[str, QCheckBox] = {}
-        self._csv_path: Path | None = None
+        self._input_path: Path | None = None
+        self._watchlist = Watchlist.load()
 
+        self.tabs = QTabWidget()
+        self.setCentralWidget(self.tabs)
+
+        self.tabs.addTab(self._build_screener_tab(), "Screener")
+
+        self.thresholds_tab = ThresholdsTab()
+        self.thresholds_tab.changed.connect(self._on_thresholds_changed)
+        self.tabs.addTab(self.thresholds_tab, "Thresholds")
+
+        self.watchlist_tab = WatchlistTab(self._watchlist)
+        self.watchlist_tab.changed.connect(self._render_table_only)
+        self.tabs.addTab(self.watchlist_tab, "Watchlist")
+
+        self.sectors_tab = SectorsTab()
+        self.tabs.addTab(self.sectors_tab, "Sectors")
+
+        self._build_tray()
+
+    # ------------------------------------------------------------------ screener tab
+
+    def _build_screener_tab(self) -> QWidget:
         root = QWidget()
-        self.setCentralWidget(root)
         layout = QVBoxLayout(root)
 
         layout.addWidget(self._build_sources())
@@ -110,7 +151,7 @@ class ScreenerWindow(QMainWindow):
         self.progress.setVisible(False)
         layout.addWidget(self.progress)
 
-        self.status = QLabel("Press Generate Results to run the pipeline.")
+        self.status = QLabel("Choose an input, then press Generate Results.")
         self.status.setStyleSheet("color:#555; padding:2px;")
         layout.addWidget(self.status)
 
@@ -118,100 +159,99 @@ class ScreenerWindow(QMainWindow):
         self.summary.setStyleSheet("font-weight:bold; padding:2px;")
         layout.addWidget(self.summary)
 
+        legend = QLabel(
+            "Green row = in a tailwind sector AND top-3 by market cap in its Screener.in industry."
+        )
+        legend.setStyleSheet("color:#1b5e20; font-size:11px; padding:2px;")
+        layout.addWidget(legend)
+
         splitter = QSplitter(Qt.Orientation.Vertical)
         self.table = QTableWidget(0, len(COLUMNS))
         self.table.setHorizontalHeaderLabels(COLUMNS)
-        self.table.setSortingEnabled(False)
         self.table.setAlternatingRowColors(True)
         self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.setColumnWidth(1, 210)
-        self.table.setColumnWidth(3, 150)
+        self.table.setColumnWidth(1, 190)
+        self.table.setColumnWidth(3, 145)
+        self.table.setColumnWidth(COL_DESC, 320)
+        self.table.itemSelectionChanged.connect(self._on_row_selected)
         splitter.addWidget(self.table)
 
         self.cards = QTextEdit()
         self.cards.setReadOnly(True)
         self.cards.setFont(QFont("Consolas", 9))
-        card_area = QScrollArea()
-        card_area.setWidgetResizable(True)
-        card_area.setWidget(self.cards)
-        splitter.addWidget(card_area)
-        splitter.setSizes([420, 480])
+        area = QScrollArea()
+        area.setWidgetResizable(True)
+        area.setWidget(self.cards)
+        splitter.addWidget(area)
+        splitter.setSizes([430, 470])
         layout.addWidget(splitter, stretch=1)
-
-        self._build_tray()
-
-    # ------------------------------------------------------------------ layout
+        return root
 
     def _build_sources(self) -> QWidget:
         box = QGroupBox("Data sources")
         outer = QVBoxLayout(box)
 
-        stage1 = QHBoxLayout()
-        stage1.addWidget(QLabel("Stage 1 - Chartink CSV:"))
-        self.csv_label = QLabel()
-        self.csv_label.setStyleSheet("color:#555;")
-        upload = QPushButton("Upload CSV...")
-        upload.clicked.connect(self._choose_csv)
-        stage1.addWidget(self.csv_label, stretch=1)
-        stage1.addWidget(upload)
-        outer.addLayout(stage1)
+        row1 = QHBoxLayout()
+        row1.addWidget(QLabel("Stage 1 input:"))
+        self.input_combo = QComboBox()
+        self.input_combo.addItem("Chartink CSV export", INPUT_CSV)
+        self.input_combo.addItem("Text file (one symbol per line)", INPUT_TXT)
+        self.input_combo.addItem("Type or paste symbols", INPUT_MANUAL)
+        self.input_combo.currentIndexChanged.connect(self._on_input_mode)
+        row1.addWidget(self.input_combo)
 
-        stage2 = QHBoxLayout()
-        stage2.addWidget(QLabel("Stage 2 - fundamentals:"))
+        self.browse_button = QPushButton("Choose file...")
+        self.browse_button.clicked.connect(self._choose_file)
+        row1.addWidget(self.browse_button)
+
+        self.input_label = QLabel()
+        self.input_label.setStyleSheet("color:#555;")
+        row1.addWidget(self.input_label, stretch=1)
+        outer.addLayout(row1)
+
+        self.manual_box = QPlainTextEdit()
+        self.manual_box.setPlaceholderText(
+            "RELIANCE, HAL, BEL\nor one symbol per line - commas, spaces and newlines all work"
+        )
+        self.manual_box.setMaximumHeight(70)
+        self.manual_box.setVisible(False)
+        outer.addWidget(self.manual_box)
+
+        row2 = QHBoxLayout()
+        row2.addWidget(QLabel("Stage 2 fundamentals:"))
         self.source_combo = QComboBox()
         self.source_combo.addItem("Live from Screener.in (Premium login)", LIVE)
         self.source_combo.addItem("Saved local export", LOCAL)
         self.source_combo.currentIndexChanged.connect(self._refresh_source_label)
-        stage2.addWidget(self.source_combo)
+        row2.addWidget(self.source_combo)
 
         self.login_button = QPushButton("Screener.in login...")
         self.login_button.clicked.connect(self._screener_login)
-        stage2.addWidget(self.login_button)
+        row2.addWidget(self.login_button)
+
+        kite_button = QPushButton("Kite API...")
+        kite_button.clicked.connect(self._kite_settings)
+        row2.addWidget(kite_button)
 
         self.login_label = QLabel()
         self.login_label.setStyleSheet("color:#555;")
-        stage2.addWidget(self.login_label, stretch=1)
-        outer.addLayout(stage2)
+        row2.addWidget(self.login_label, stretch=1)
+        outer.addLayout(row2)
 
-        # Default to the configured CSV if it already exists, so the app is usable
-        # immediately without an upload step.
         try:
             default_csv = resolve_path("chartink_csv")
             if default_csv.exists():
-                self._csv_path = default_csv
+                self._input_path = default_csv
         except (KeyError, OSError):
             pass
 
         self._refresh_source_label()
         return box
 
-    def _choose_csv(self) -> None:
-        start = str(self._csv_path.parent) if self._csv_path else ""
-        path, _filter = QFileDialog.getOpenFileName(
-            self, "Select the Chartink scan export", start, "CSV files (*.csv);;All files (*)"
-        )
-        if path:
-            self._csv_path = Path(path)
-            self._refresh_source_label()
-
-    def _screener_login(self) -> None:
-        dialog = ScreenerLoginDialog(self)
-        if dialog.exec():
-            self._refresh_source_label()
-
-    def _refresh_source_label(self) -> None:
-        self.csv_label.setText(self._csv_path.name if self._csv_path else "none selected")
-        live = self.source_combo.currentData() == LIVE
-        self.login_button.setEnabled(live)
-        if not live:
-            self.login_label.setText("reading a saved export from disk")
-        elif has_credentials():
-            self.login_label.setText("credentials stored")
-        else:
-            self.login_label.setText("no credentials stored")
-
     def _build_controls(self) -> QWidget:
-        box = QGroupBox("Parameters - toggling removes a parameter from the score AND the denominator")
+        box = QGroupBox(
+            "Parameters - toggling removes a parameter from the score AND the denominator"
+        )
         outer = QVBoxLayout(box)
 
         checks = QHBoxLayout()
@@ -276,16 +316,60 @@ class ScreenerWindow(QMainWindow):
         cb = self._checkboxes.get(P8_ID)
         return cb.isChecked() if cb else True
 
+    def _input_mode(self) -> str:
+        return self.input_combo.currentData()
+
+    def _on_input_mode(self) -> None:
+        mode = self._input_mode()
+        self.manual_box.setVisible(mode == INPUT_MANUAL)
+        self.browse_button.setVisible(mode != INPUT_MANUAL)
+        self._refresh_source_label()
+
+    def _choose_file(self) -> None:
+        mode = self._input_mode()
+        start = str(self._input_path.parent) if self._input_path else ""
+        if mode == INPUT_CSV:
+            caption, filters = "Select the Chartink scan export", "CSV files (*.csv);;All files (*)"
+        else:
+            caption, filters = "Select a symbol list", "Text files (*.txt);;All files (*)"
+        path, _ = QFileDialog.getOpenFileName(self, caption, start, filters)
+        if path:
+            self._input_path = Path(path)
+            self._refresh_source_label()
+
+    def _screener_login(self) -> None:
+        if ScreenerLoginDialog(self).exec():
+            self._refresh_source_label()
+
+    def _kite_settings(self) -> None:
+        KiteSettingsDialog(self).exec()
+        self._refresh_source_label()
+
+    def _refresh_source_label(self) -> None:
+        mode = self._input_mode()
+        if mode == INPUT_MANUAL:
+            self.input_label.setText("typed symbols")
+        else:
+            self.input_label.setText(
+                self._input_path.name if self._input_path else "no file selected"
+            )
+
+        live = self.source_combo.currentData() == LIVE
+        self.login_button.setEnabled(live)
+        if not live:
+            self.login_label.setText("reading a saved export from disk")
+        elif has_credentials():
+            self.login_label.setText("Screener.in credentials stored")
+        else:
+            self.login_label.setText("no Screener.in credentials stored")
+
     # ------------------------------------------------------------------ actions
 
     def generate(self) -> None:
         """The single trigger. Runs the whole pipeline synchronously."""
-        if self._csv_path is None or not self._csv_path.exists():
-            QMessageBox.warning(
-                self,
-                "No Chartink CSV",
-                "Upload the Chartink scan export first - it supplies the stage-1 ticker list.",
-            )
+        hits, error = self._collect_hits()
+        if error:
+            QMessageBox.warning(self, "Stage 1 input", error)
             return
 
         source = self.source_combo.currentData()
@@ -312,13 +396,17 @@ class ScreenerWindow(QMainWindow):
         def progress(message: str, pct: int) -> None:
             self.status.setText(message)
             self.progress.setValue(pct)
-            QApplication.processEvents()  # keep the window responsive during the sync run
+            QApplication.processEvents()
 
         try:
             self._result = run_pipeline(
-                chartink_csv=self._csv_path, data_source=source, progress=progress
+                chartink_csv=self._input_path if self._input_mode() == INPUT_CSV else None,
+                hits=hits,
+                data_source=source,
+                progress=progress,
+                exclude_symbols=self._watchlist.removed_symbols(),
             )
-        except Exception as exc:  # a crash must not leave the user without an explanation
+        except Exception as exc:
             self._add_banner("error", f"Pipeline failed: {exc}")
             self.status.setText("Run failed.")
             return
@@ -328,15 +416,43 @@ class ScreenerWindow(QMainWindow):
 
         self._render()
 
+    def _collect_hits(self) -> tuple[list | None, str]:
+        """Resolve the stage-1 list. Returns (hits, error). hits=None means 'read the CSV'."""
+        mode = self._input_mode()
+
+        if mode == INPUT_CSV:
+            if self._input_path is None or not self._input_path.exists():
+                return None, "Choose the Chartink CSV export first."
+            return None, ""
+
+        if mode == INPUT_TXT:
+            if self._input_path is None or not self._input_path.exists():
+                return None, "Choose a text file of symbols first."
+            hits, rejected = load_symbol_file(self._input_path)
+            if not hits:
+                return None, f"No usable symbols found in {self._input_path.name}."
+            self._warn_rejected(rejected)
+            return hits, ""
+
+        hits, rejected = hits_from_text(self.manual_box.toPlainText())
+        if not hits:
+            return None, "Type at least one symbol."
+        self._warn_rejected(rejected)
+        return hits, ""
+
+    def _warn_rejected(self, rejected: list[str]) -> None:
+        if rejected:
+            self._add_banner(
+                "warning",
+                f"Ignored {len(rejected)} entry/entries that do not look like NSE symbols: "
+                + ", ".join(rejected[:10]),
+            )
+
     def _ensure_kite_token(self) -> bool:
-        """Checked on every press, per spec section 10 - prompt inline rather than fail later."""
         check = check_token()
         if check.ok or check.state in (TokenState.NO_API_KEY, TokenState.LIBRARY_MISSING):
-            # Not authenticated, but that is a banner condition, not a blocker - the run
-            # still produces fundamentals-based scores without live quotes.
             return True
 
-        url = build_login_url()
         answer = QMessageBox.question(
             self,
             "Kite login required",
@@ -344,8 +460,9 @@ class ScreenerWindow(QMainWindow):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if answer != QMessageBox.StandardButton.Yes:
-            return True  # proceed without live prices
+            return True
 
+        url = build_login_url()
         if url:
             webbrowser.open(url)
         redirect, ok = QInputDialog.getText(
@@ -358,10 +475,18 @@ class ScreenerWindow(QMainWindow):
         return True
 
     def _on_toggle(self) -> None:
-        """Re-score and re-render instantly. Never re-runs the pipeline."""
+        """Toggles change arithmetic only - re-score, never re-evaluate or re-fetch."""
         self.summary.setText(summary_line(self._toggles()))
         if self._result is not None:
             self._render(rerun_banners=False)
+
+    def _on_thresholds_changed(self) -> None:
+        """Thresholds change the verdicts themselves - re-evaluate against cached data."""
+        if self._result is None:
+            return
+        reevaluate(self._result)
+        self._render(rerun_banners=False)
+        self.tabs.setCurrentIndex(0)
 
     # ----------------------------------------------------------------- rendering
 
@@ -378,11 +503,16 @@ class ScreenerWindow(QMainWindow):
         as_of = context.as_of_trading_day or context.run_at
         self.status.setText(
             f"Run {context.run_at:%d %b %Y} - data as of {as_of:%d %b %Y}. "
-            f"Stage 1 returned {context.stage1_count}; {len(self._ranked)} scored."
+            f"Stage 1 supplied {context.stage1_count}; {len(self._ranked)} scored."
         )
         self.summary.setText(summary_line(toggles))
         self._render_table(toggles)
         self._render_cards(toggles)
+        self.sectors_tab.refresh(self._ranked)
+
+    def _render_table_only(self) -> None:
+        if self._result is not None:
+            self._render_table(self._toggles())
 
     def _render_banners(self, context: RunContext) -> None:
         self._clear_banners()
@@ -403,14 +533,17 @@ class ScreenerWindow(QMainWindow):
 
     def _render_table(self, toggles: dict[str, bool]) -> None:
         show_p8 = self._show_p8()
+        self.table.blockSignals(True)
         self.table.setRowCount(len(self._ranked))
-        self.table.setColumnHidden(4, not show_p8)
+        self.table.setColumnHidden(COL_TAILWIND, not show_p8)
 
         for row, stock in enumerate(self._ranked):
             flags = "; ".join(
                 f.message for f in stock.all_flags
                 if f.severity in ("risk", "positive") and (show_p8 or f.param_id != P8_ID)
             )
+            leader = show_p8 and is_sector_leader(stock)
+
             values = [
                 stock.symbol,
                 stock.industry or "-",
@@ -419,28 +552,120 @@ class ScreenerWindow(QMainWindow):
                 ("Yes" if stock.sector_tailwind else "No") if show_p8 else "",
                 f"{stock.pegy:.2f}" if stock.pegy is not None else "-",
                 f"{stock.pb:.2f}" if stock.pb is not None else "-",
+                "",  # watchlist combo goes here
+                self._describe(stock),
                 flags,
             ]
             for col, value in enumerate(values):
+                if col == COL_WATCH:
+                    continue
                 item = QTableWidgetItem(value)
                 if col == 3:
                     item.setForeground(QColor(TIER_COLOURS[stock.tier]))
                     font = item.font()
                     font.setBold(True)
                     item.setFont(font)
+                if leader:
+                    item.setBackground(LEADER_BG)
+                    if col == 0:
+                        item.setForeground(LEADER_FG)
+                        item.setToolTip(leader_reason(stock))
+                if col == COL_DESC:
+                    item.setToolTip(self._describe(stock, full=True))
                 self.table.setItem(row, col, item)
+
+            self.table.setCellWidget(row, COL_WATCH, self._watch_widget(stock))
+
+        self.table.blockSignals(False)
+
+    def _watch_widget(self, stock: ScoredStock) -> QWidget:
+        combo = QComboBox()
+        for state in (WatchState.NONE, WatchState.WATCHING, WatchState.REMOVED):
+            combo.addItem(state.label, state)
+        current = self._watchlist.state_of(stock.symbol)
+        combo.setCurrentIndex(combo.findData(current))
+        combo.currentIndexChanged.connect(
+            lambda _i, s=stock, c=combo: self._on_watch_changed(s, c.currentData())
+        )
+        return combo
+
+    def _on_watch_changed(self, stock: ScoredStock, state: WatchState) -> None:
+        self._watchlist.set_state(
+            stock.symbol, state, tier=stock.tier.value, score=stock.score_display
+        )
+        self._watchlist.save()
+        self.watchlist_tab.refresh()
+
+    def _describe(self, stock: ScoredStock, full: bool = False) -> str:
+        """Business USP and latest concall note, quoted from Screener.in.
+
+        Never generated here - if Screener.in has no summary for a company, the cell says
+        so and the detail card carries the transcript link instead.
+        """
+        company = self._result.store.get(stock.symbol) if self._result and self._result.store else None
+        if company is None:
+            return ""
+
+        parts: list[str] = []
+        if company.concall_summary:
+            label = f"Concall {company.concall_date}".strip()
+            parts.append(f"{label}: {company.concall_summary}")
+        if company.key_points:
+            parts.append("USP: " + " ".join(company.key_points[:3]))
+        elif company.about:
+            parts.append(company.about)
+        if not parts:
+            return "no Screener.in description available"
+
+        text = " | ".join(parts).replace("\n", " ")
+        return text if full else (text[:190] + ("..." if len(text) > 190 else ""))
 
     def _render_cards(self, toggles: dict[str, bool]) -> None:
         finalists = [s for s in self._ranked if s.tier.rank >= Tier.QUALITY_GROWER.rank]
         if not finalists:
             self.cards.setPlainText(
                 "No stock reached QUALITY GROWER with the current parameter selection.\n"
-                "Detail cards are generated for QUALITY GROWER and above (spec section 6)."
+                "Detail cards are generated for QUALITY GROWER and above."
             )
             return
         self.cards.setPlainText(
-            "\n\n".join(format_detail_card(s, toggles) for s in finalists)
+            "\n\n".join(self._card_with_narrative(s, toggles) for s in finalists)
         )
+
+    def _card_with_narrative(self, stock: ScoredStock, toggles: dict[str, bool]) -> str:
+        card = format_detail_card(stock, toggles)
+        company = self._result.store.get(stock.symbol) if self._result and self._result.store else None
+        if company is None:
+            return card
+
+        extra = ["", "Business and latest concall (from Screener.in):"]
+        if company.about:
+            extra.append(f"    About: {company.about}")
+        for point in company.key_points[:6]:
+            extra.append(f"    - {point}")
+        if company.concall_summary:
+            extra.append(f"    Concall summary ({company.concall_date}):")
+            extra.extend(f"      {line}" for line in company.concall_summary.splitlines()[:10])
+        elif company.concall_links:
+            extra.append("    No Screener.in concall summary available. Transcripts:")
+            for date_label, kind, url in company.concall_links[:3]:
+                extra.append(f"      {date_label} {kind}: {url}")
+        if company.industry_rank:
+            extra.append(
+                f"    Industry rank: #{company.industry_rank} of "
+                f"{company.industry_peer_count} by market cap in {company.industry}"
+            )
+        return card + "\n".join(extra)
+
+    def _on_row_selected(self) -> None:
+        rows = {i.row() for i in self.table.selectedIndexes()}
+        if len(rows) != 1:
+            return
+        row = rows.pop()
+        if 0 <= row < len(self._ranked):
+            stock = self._ranked[row]
+            if stock.tier.rank >= Tier.QUALITY_GROWER.rank:
+                self.cards.setPlainText(self._card_with_narrative(stock, self._toggles()))
 
 
 def main() -> int:

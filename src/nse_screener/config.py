@@ -13,13 +13,66 @@ ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = ROOT / "config"
 
 
+USER_THRESHOLDS = CONFIG_DIR / "user_thresholds.json"
+
+
 def _load_json(path: Path) -> dict[str, Any]:
     with path.open(encoding="utf-8") as fh:
         return json.load(fh)
 
 
+def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in overlay.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
 @lru_cache(maxsize=1)
 def settings() -> dict[str, Any]:
+    """Base config with any saved user threshold overrides merged on top.
+
+    params.py reads thresholds through this, so an override takes effect everywhere
+    without any parameter rule needing to know overrides exist.
+    """
+    base = _load_json(CONFIG_DIR / "settings.json")
+    if USER_THRESHOLDS.exists():
+        try:
+            return _deep_merge(base, _load_json(USER_THRESHOLDS))
+        except (json.JSONDecodeError, OSError):
+            # A corrupt override file must not take the app down - fall back to defaults.
+            return base
+    return base
+
+
+def load_overrides() -> dict[str, Any]:
+    if not USER_THRESHOLDS.exists():
+        return {}
+    try:
+        return _load_json(USER_THRESHOLDS)
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def save_overrides(overrides: dict[str, Any]) -> None:
+    """Persist threshold overrides and make them live immediately."""
+    USER_THRESHOLDS.parent.mkdir(parents=True, exist_ok=True)
+    with USER_THRESHOLDS.open("w", encoding="utf-8") as fh:
+        json.dump(overrides, fh, indent=2)
+    settings.cache_clear()
+
+
+def reset_overrides() -> None:
+    if USER_THRESHOLDS.exists():
+        USER_THRESHOLDS.unlink()
+    settings.cache_clear()
+
+
+def default_settings() -> dict[str, Any]:
+    """Shipped defaults, ignoring any user overrides - used to show 'reset to default'."""
     return _load_json(CONFIG_DIR / "settings.json")
 
 

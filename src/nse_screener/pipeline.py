@@ -53,9 +53,40 @@ def _noop(_message: str, _pct: int) -> None:
 
 
 class PipelineResult:
-    def __init__(self, stocks: list[ScoredStock], context: RunContext) -> None:
+    def __init__(
+        self,
+        stocks: list[ScoredStock],
+        context: RunContext,
+        store: FundamentalsStore | None = None,
+        hits: list[Stage1Hit] | None = None,
+        sector_valuations: dict[str, dict[str, float]] | None = None,
+    ) -> None:
         self.stocks = stocks
         self.context = context
+        # Retained so threshold edits can re-evaluate without re-fetching anything.
+        self.store = store
+        self.hits = hits or []
+        self.sector_valuations = sector_valuations or {}
+
+
+def reevaluate(result: PipelineResult) -> list[ScoredStock]:
+    """Re-run parameter evaluation against the cached data.
+
+    Toggling a parameter only needs re-scoring, but changing a THRESHOLD changes the
+    verdicts themselves, so the rules have to run again. Data is reused, so this is
+    instant and never touches the network.
+    """
+    if result.store is None:
+        return result.stocks
+
+    stocks: list[ScoredStock] = []
+    for hit in result.hits:
+        company = result.store.get(hit.symbol)
+        if company is None:
+            continue
+        stocks.append(_evaluate(company, hit, result.store, result.sector_valuations))
+    result.stocks = stocks
+    return stocks
 
 
 def run_pipeline(
@@ -64,7 +95,14 @@ def run_pipeline(
     progress: ProgressFn | None = None,
     today: date | None = None,
     use_kite: bool = True,
+    hits: list[Stage1Hit] | None = None,
+    exclude_symbols: set[str] | None = None,
 ) -> PipelineResult:
+    """Run the whole thing once.
+
+    `hits` lets a caller supply the stage-1 list directly (text file or typed symbols)
+    instead of reading a Chartink CSV.
+    """
     report = progress or _noop
     today = today or date.today()
     context = RunContext(run_at=today, as_of_trading_day=today)
@@ -82,13 +120,26 @@ def run_pipeline(
         context.warn("kite_token", token.message, severity=severity)
 
     # --- stage 1 ---------------------------------------------------------------
-    report("Loading Chartink CSV...", 18)
-    csv_path = Path(chartink_csv) if chartink_csv else resolve_path("chartink_csv")
-    try:
-        hits = load_chartink_csv(csv_path)
-    except Stage1CsvError as exc:
-        context.warn("stage1_failed", str(exc), severity="error")
-        return PipelineResult([], context)
+    if hits is None:
+        report("Loading Chartink CSV...", 18)
+        csv_path = Path(chartink_csv) if chartink_csv else resolve_path("chartink_csv")
+        try:
+            hits = load_chartink_csv(csv_path)
+        except Stage1CsvError as exc:
+            context.warn("stage1_failed", str(exc), severity="error")
+            return PipelineResult([], context)
+    else:
+        report(f"Using {len(hits)} supplied symbol(s)...", 18)
+
+    if exclude_symbols:
+        before = len(hits)
+        hits = [h for h in hits if h.symbol not in exclude_symbols]
+        if before != len(hits):
+            context.warn(
+                "watchlist_excluded",
+                f"{before - len(hits)} stock(s) skipped - previously removed in the watchlist.",
+                severity="info",
+            )
 
     context.stage1_count = len(hits)
     if hits and hits[0].scan_date:
@@ -162,7 +213,7 @@ def run_pipeline(
             context.warn("kite_quotes", f"Live quote check skipped: {exc}", severity="warning")
 
     report("Done.", 100)
-    return PipelineResult(stocks, context)
+    return PipelineResult(stocks, context, store=store, hits=hits, sector_valuations=sector_valuations)
 
 
 def _load_live(

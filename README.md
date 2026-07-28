@@ -14,14 +14,47 @@ The engine runs end to end against stub fundamentals. What is built:
 
 | Piece | State |
 |---|---|
-| Stage 1 — Chartink CSV upload | Working |
+| Stage 1 — CSV upload, text file, or typed symbols | Working |
 | Stage 2 — live Screener.in fetch (your Premium login) | Working; parser verified against live pages |
 | Stage 2 — saved local export (fallback) | Working |
 | Stage 2 — P1–P8 parameter rules | Working |
-| Scoring engine — toggles, percentage tiering, no hard gate | Working, 113 tests |
+| Scoring engine — toggles, percentage tiering, no hard gate | Working, 154 tests |
+| Editable thresholds per parameter | Working |
+| Watchlist (add / remove / no action) | Working |
+| Sector tailwind panel with leader highlighting | Working |
+| Per-stock description (business USP + concall) | Working |
 | PyQt6 desktop GUI | Working |
-| Kite Connect — token check, quotes, historical | Built; needs your API key to exercise |
+| Kite Connect — in-app API key entry, quotes, historical | Working; needs your API key |
 | Backtest — pandas forward-return study | Working |
+
+## The four tabs
+
+**Screener** — pick an input, press Generate Results, see the ranked table and detail
+cards. Rows shaded green are in a tailwind sector *and* top-3 by market cap in their
+Screener.in industry. Each row has a watchlist control and a description column.
+
+**Thresholds** — every number the rules depend on, editable. Changing one re-evaluates
+the current results immediately without re-fetching, since only the rules changed, not
+the data. Fields differing from the shipped default are highlighted, and there's a reset.
+
+**Watchlist** — everything you added, with the tier and score captured at the time plus a
+free-text note. "Removed" is a distinct state from "never seen", so a stock you dismissed
+stays dismissed on later runs instead of resurfacing as new.
+
+**Sectors** — the five tailwind sectors, their rationale, how stale the review is, and
+which of this run's stocks fall in each (leaders separated from plain members).
+
+## Stage 1 input
+
+Three ways in, all producing the same ticker list:
+
+- **Chartink CSV export** — the file you download from Chartink.
+- **Text file** — one symbol per line.
+- **Type or paste** — commas, spaces and newlines all work.
+
+Text and manual input carry no price data, so close/volume are backfilled from Kite where
+available. Anything that doesn't look like an NSE symbol is reported back to you rather
+than silently skipped.
 
 ## Setup
 
@@ -103,16 +136,43 @@ fundamentals fields.
 | Promoter / FII / DII / government % | `#shareholding` |
 | Blended EPS growth | mean of 3-year and 5-year compounded profit growth |
 | Industry hierarchy | nested `/market/` links, broad → specific |
+| Business description / USP | `About` and `Key Points` blocks, quoted verbatim |
+| Concall transcripts | Documents section, restricted to `concall-link` rows |
+| Concall summary | `/concalls/summary/` — Premium-gated; falls back to transcript links |
+| Industry rank by market cap | the `/market/` industry table (public, whole industry) |
 
 Two fields are **not** available and are handled as missing rather than guessed:
 promoter **pledge %** (absent from the shareholding table, so P6's pledge flag never
 fires on live data) and per-year ROE as published (derived instead, as above).
 
+### On the stock descriptions
+
+The description column and detail cards quote Screener.in — the About blurb, the Key
+Points business-segment commentary, and Screener's own concall summary where your Premium
+account can reach it. Nothing is generated or paraphrased here. If Screener has no
+summary for a company, the card links the transcript instead of inventing a précis of an
+earnings call next to a buy signal.
+
+### On the sector list
+
+The five tailwind sectors in `config/sector_map.json` are a **human 3-year macro
+judgement**, not something the app derives. It cannot read the news and forecast sector
+leadership, and pretending otherwise would make the output look better-founded than it
+is. What the app does verify is membership in that list plus a real top-3-by-market-cap
+rank from Screener.in's industry table — a stock is highlighted only when both hold. The
+Sectors tab shows when the list was last reviewed and nags when it goes over 90 days.
+
 ### Credentials
 
 Screener.in and Kite credentials live in Windows Credential Manager via `keyring`, or in
-environment variables. Never in this repo. The Screener.in password is entered in the
-app's own dialog and sent only to screener.in.
+environment variables. Never in this repo.
+
+- **Screener.in** — email and password entered in the app's own dialog, verified before
+  saving, sent only to screener.in.
+- **Kite Connect** — API key and secret entered under **Kite API...**, from
+  developers.kite.trade. The daily access token comes from Zerodha's own browser login:
+  the app opens the page, you log in there, and paste back the redirect URL. Your Zerodha
+  password is never typed into this app.
 
 ## Refresh cadence
 

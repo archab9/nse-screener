@@ -191,6 +191,132 @@ def parse_top_ratios(page: str) -> dict[str, float | None]:
 
 
 _RANGE_ROW_RE = re.compile(r"<td[^>]*>(.*?)</td>\s*<td[^>]*>(.*?)</td>", re.S)
+_COMPANY_ID_RE = re.compile(r"/company/(?:actions|chat)/(\d+)/")
+_CONCALL_SUMMARY_ID_RE = re.compile(r"/concalls/summary/(\d+)/")
+_MARKET_HREF_RE = re.compile(r"href=\"(/market/[^\"]+)\"")
+
+
+def parse_company_id(page: str) -> str | None:
+    """Screener's internal numeric id, needed for the concall-summary endpoint."""
+    match = _COMPANY_ID_RE.search(page)
+    return match.group(1) if match else None
+
+
+# Verified against live markup:
+#   <div class="title">About</div>
+#   <div class="sub show-more-box about"><p>...</p></div>
+#   <div class="title">Key Points</div>
+#   <div class="sub commentary always-show-more-box"><p><strong>Business Segments</strong>...</p></div>
+_ABOUT_RE = re.compile(r"<div[^>]*class=\"[^\"]*\babout\b[^\"]*\"[^>]*>(.*?)</div>", re.S)
+_KEY_POINTS_RE = re.compile(r"<div[^>]*class=\"[^\"]*\bcommentary\b[^\"]*\"[^>]*>(.*?)</div>", re.S)
+_SUP_RE = re.compile(r"<sup[^>]*>.*?</sup>", re.S)
+
+
+def parse_about(page: str) -> tuple[str, list[str]]:
+    """The 'About' blurb and the 'Key Points' commentary.
+
+    This is where a company's business description and segment mix live - the closest
+    thing Screener.in publishes to a business USP. Returned verbatim; nothing inferred.
+    Footnote superscripts ([1], [2] links to filings) are stripped as display noise.
+    """
+    about = ""
+    about_match = _ABOUT_RE.search(page)
+    if about_match:
+        about = _text(_SUP_RE.sub("", about_match.group(1)))
+
+    points: list[str] = []
+    points_match = _KEY_POINTS_RE.search(page)
+    if points_match:
+        block = _SUP_RE.sub("", points_match.group(1))
+        # Each <p> is a segment or theme; <br> separates the heading from its detail.
+        for para in re.findall(r"<p[^>]*>(.*?)</p>", block, re.S):
+            for chunk in re.split(r"<br\s*/?>", para):
+                text = _text(chunk)
+                if text and len(text) > 12:
+                    points.append(text[:400])
+        if not points:
+            for item in re.findall(r"<li[^>]*>(.*?)</li>", block, re.S):
+                text = _text(item)
+                if text and len(text) > 12:
+                    points.append(text[:400])
+
+    return about[:1200], points[:10]
+
+
+_DATE_LABEL_RE = re.compile(r"^([A-Z][a-z]{2}\s+\d{4})")
+
+
+def parse_concall_links(page: str) -> list[tuple[str, str, str]]:
+    """(date, kind, url) for each concall document, newest first.
+
+    Restricted to rows carrying an `a.concall-link`. The Documents section also holds
+    announcements, annual reports and credit ratings, and matching on dates alone pulled
+    those in too - a rating update is not an earnings call.
+    """
+    section = _section(page, "documents")
+    if not section:
+        return []
+
+    out: list[tuple[str, str, str]] = []
+    for row in re.findall(r"<li[^>]*>(.*?)</li>", section, re.S):
+        if "concall-link" not in row:
+            continue
+        date_match = _DATE_LABEL_RE.match(_text(row))
+        date_label = date_match.group(1) if date_match else ""
+        for href, label in re.findall(
+            r"<a[^>]*class=\"[^\"]*concall-link[^\"]*\"[^>]*href=\"([^\"]+)\"[^>]*>(.*?)</a>",
+            row,
+            re.S,
+        ):
+            kind = _text(label)
+            if kind and href.startswith("http"):
+                out.append((date_label, kind, href))
+    return out[:24]
+
+
+def parse_concall_summary_ids(page: str) -> list[str]:
+    """Summary ids in document order, so index 0 is the most recent call."""
+    return _CONCALL_SUMMARY_ID_RE.findall(page)
+
+
+_COMPANY_HREF_RE = re.compile(r"href=\"/company/([^/\"]+)/")
+
+
+def parse_industry_table(html_text: str) -> list[tuple[str, float | None]]:
+    """(symbol, market cap) rows from a Screener.in /market/ industry page.
+
+    This is the authoritative peer set for 'top 3 by market cap in the industry': a public
+    page, no login needed, covering the whole industry rather than whatever happened to be
+    in the stage-1 shortlist.
+
+    The symbol is taken from each row's /company/<SYMBOL>/ link. The visible name is
+    abbreviated ('Hind.Aeronautics'), so matching on it would be guesswork.
+    """
+    table = re.search(r"<table[^>]*>(.*?)</table>", html_text, re.S)
+    if not table:
+        return []
+
+    rows = re.findall(r"<tr[^>]*>(.*?)</tr>", table.group(1), re.S)
+    if not rows:
+        return []
+
+    header = [_text(c).lower() for c in _CELL_RE.findall(rows[0])]
+    cap_col = next(
+        (i for i, h in enumerate(header) if "mar cap" in h or "market cap" in h), None
+    )
+    if cap_col is None:
+        return []
+
+    out: list[tuple[str, float | None]] = []
+    for row in rows[1:]:
+        symbol_match = _COMPANY_HREF_RE.search(row)
+        if not symbol_match:
+            continue
+        cells = [_text(c) for c in _CELL_RE.findall(row)]
+        if len(cells) <= cap_col:
+            continue
+        out.append((symbol_match.group(1).upper(), _num(cells[cap_col].replace(",", ""))))
+    return out
 
 
 def parse_growth_table(page: str, heading: str) -> dict[str, float | None]:
@@ -267,6 +393,16 @@ def parse_company_page(symbol: str, page: str) -> CompanyFundamentals:
                     net_profit=profit[i] if i < len(profit) else None,
                 )
             )
+
+    company.about, company.key_points = parse_about(page)
+    company.concall_links = parse_concall_links(page)
+    if company.concall_links:
+        company.concall_date = company.concall_links[0][0]
+
+    market_hrefs = sorted(set(_MARKET_HREF_RE.findall(page)))
+    if market_hrefs:
+        # Deepest href = most specific industry, which is the right peer universe.
+        company.industry_url = BASE_URL + max(market_hrefs, key=lambda h: h.count("/"))
 
     _parse_annual(company, page)
     _parse_shareholding(company, page)
@@ -421,6 +557,8 @@ class ScreenerClient:
         self.session = requests.Session()
         self.session.headers.update(HEADERS)
         self._logged_in = False
+        # One industry page serves every company in it - fetch each at most once per run.
+        self._industry_cache: dict[str, list[tuple[str, float | None]]] = {}
 
     def login(self, username: str | None = None, password: str | None = None) -> None:
         username = username or screener_username()
@@ -504,9 +642,79 @@ class ScreenerClient:
             if response.status_code >= 400:
                 last_error = ScreenerParseError(f"{symbol}: HTTP {response.status_code}")
                 continue
-            return parse_company_page(symbol, response.text)
+
+            company = parse_company_page(symbol, response.text)
+            self._enrich(company, response.text)
+            return company
 
         raise ScreenerParseError(f"Could not fetch {symbol}: {last_error or 'not found'}")
+
+    def _enrich(self, company: CompanyFundamentals, page: str) -> None:
+        """Add concall summary and real industry rank. Failures here are never fatal -
+        they are narrative extras, not scoring inputs."""
+        summary_ids = _CONCALL_SUMMARY_ID_RE.findall(page)
+        if summary_ids:
+            try:
+                summary = self.fetch_concall_summary(summary_ids[0])
+                if summary:
+                    company.concall_summary = summary
+            except requests.RequestException:
+                pass
+
+        if company.industry_url:
+            try:
+                rank, total = self.industry_rank(company)
+                company.industry_rank, company.industry_peer_count = rank, total
+            except requests.RequestException:
+                pass
+
+    def fetch_concall_summary(self, summary_id: str) -> str:
+        """Screener.in's own concall summary. Premium/login-gated.
+
+        Returned verbatim. This is deliberately Screener's summary rather than one
+        generated here - the user asked for authentic Screener data, and a generated
+        summary of an earnings call is exactly the kind of thing that should not be
+        invented next to a buy signal.
+        """
+        response = self.session.get(
+            f"{BASE_URL}/concalls/summary/{summary_id}/",
+            headers={"X-Requested-With": "XMLHttpRequest"},
+            timeout=self.timeout,
+        )
+        if response.status_code >= 400:
+            return ""
+        text = response.text
+        if "Register - Screener" in text or "Login" in text[:2000]:
+            return ""  # not authorised - caller shows the transcript link instead
+
+        parts = [_text(p) for p in re.findall(r"<li[^>]*>(.*?)</li>", text, re.S)]
+        parts = [p for p in parts if len(p) > 25]
+        if not parts:
+            parts = [_text(p) for p in re.findall(r"<p[^>]*>(.*?)</p>", text, re.S)]
+            parts = [p for p in parts if len(p) > 25]
+        return "\n".join(f"- {p}" for p in parts[:10])[:2000]
+
+    def industry_rank(self, company: CompanyFundamentals) -> tuple[int | None, int | None]:
+        """Rank this company by market cap within its full Screener.in industry."""
+        if not company.industry_url:
+            return None, None
+        cached = self._industry_cache.get(company.industry_url)
+        if cached is None:
+            response = self.session.get(company.industry_url, timeout=self.timeout)
+            if response.status_code >= 400:
+                return None, None
+            cached = parse_industry_table(response.text)
+            self._industry_cache[company.industry_url] = cached
+        if not cached:
+            return None, None
+
+        ranked = sorted(
+            ((s, c) for s, c in cached if c is not None), key=lambda r: r[1], reverse=True
+        )
+        for position, (symbol, _cap) in enumerate(ranked, start=1):
+            if symbol == company.symbol:
+                return position, len(ranked)
+        return None, len(ranked)
 
     def fetch_many(
         self, symbols: list[str], on_progress=None
