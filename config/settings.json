@@ -21,6 +21,12 @@
     }
   },
 
+  "screener": {
+    "_note": "Screener.in rate-limits on a short rolling window. Unpaced, a 20-stock run gets HTTP 429 on everything after roughly the first eight. Raise min_request_interval_s if 429s still appear.",
+    "min_request_interval_s": 1.2,
+    "max_retries": 4
+  },
+
   "stage2": {
     "source": "live",
     "_source_options": ["live", "local"],

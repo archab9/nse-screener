@@ -30,7 +30,10 @@ from __future__ import annotations
 
 import html
 import os
+import random
 import re
+import threading
+import time
 from dataclasses import dataclass
 from datetime import date
 
@@ -71,6 +74,37 @@ class ScreenerParseError(RuntimeError):
     pass
 
 
+class ScreenerRateLimited(ScreenerParseError):
+    """Raised only after retries are exhausted, so the caller can say why it failed."""
+
+
+class _Throttle:
+    """Minimum spacing between requests to one host.
+
+    Screener.in rate-limits on a short rolling window. Firing a 20-stock run as fast as
+    the network allows meant roughly the first eight succeeded and everything after them
+    came back 429 - which showed up as "a few stocks could not be read", with a different
+    few each run depending on ordering. Pacing the requests removes the cause; the retry
+    below only covers what pacing cannot predict.
+    """
+
+    def __init__(self, min_interval: float) -> None:
+        self.min_interval = min_interval
+        self._lock = threading.Lock()
+        self._last = 0.0
+
+    def wait(self) -> None:
+        with self._lock:
+            gap = time.monotonic() - self._last
+            if gap < self.min_interval:
+                time.sleep(self.min_interval - gap)
+            self._last = time.monotonic()
+
+    def back_off(self, seconds: float) -> None:
+        with self._lock:
+            self._last = time.monotonic() + seconds
+
+
 # --------------------------------------------------------------------- credentials
 
 def screener_username() -> str | None:
@@ -93,6 +127,16 @@ def has_credentials() -> bool:
 
 
 # ------------------------------------------------------------------- html parsing
+
+def _retry_after(response: requests.Response) -> float | None:
+    raw = response.headers.get("Retry-After")
+    if not raw:
+        return None
+    try:
+        return min(float(raw), 60.0)
+    except ValueError:
+        return None
+
 
 _TAG_RE = re.compile(r"<[^>]+>")
 _SECTION_RE = "<section[^>]*id=\"{sid}\"[^>]*>(.*?)</section>"
@@ -552,13 +596,59 @@ def _period_year(period: str) -> tuple[int, int]:
 class ScreenerClient:
     """Authenticated Screener.in session."""
 
-    def __init__(self, timeout: int = 30) -> None:
+    def __init__(self, timeout: int = 30, min_interval: float | None = None,
+                 max_retries: int | None = None) -> None:
+        cfg = settings().get("screener", {})
         self.timeout = timeout
         self.session = requests.Session()
         self.session.headers.update(HEADERS)
         self._logged_in = False
         # One industry page serves every company in it - fetch each at most once per run.
         self._industry_cache: dict[str, list[tuple[str, float | None]]] = {}
+        self._throttle = _Throttle(
+            min_interval if min_interval is not None else cfg.get("min_request_interval_s", 1.2)
+        )
+        self._max_retries = (
+            max_retries if max_retries is not None else int(cfg.get("max_retries", 4))
+        )
+        self.rate_limit_hits = 0
+
+    def _request(self, url: str, method: str = "GET", **kwargs) -> requests.Response:
+        """Every call to Screener.in goes through here: paced, and retried on 429/5xx.
+
+        Retry-After is honoured when sent; otherwise the wait grows exponentially with a
+        little jitter so a batch that gets throttled does not resynchronise and hammer the
+        same instant again.
+        """
+        last: Exception | None = None
+        for attempt in range(self._max_retries + 1):
+            self._throttle.wait()
+            try:
+                response = self.session.request(method, url, timeout=self.timeout, **kwargs)
+            except requests.RequestException as exc:
+                last = exc
+                if attempt == self._max_retries:
+                    break
+                time.sleep(min(2 ** attempt, 16) + random.uniform(0, 0.4))
+                continue
+
+            if response.status_code == 429 or response.status_code >= 500:
+                self.rate_limit_hits += response.status_code == 429
+                if attempt == self._max_retries:
+                    if response.status_code == 429:
+                        raise ScreenerRateLimited(
+                            f"Screener.in rate limit persisted after {self._max_retries} "
+                            f"retries. Raise screener.min_request_interval_s in settings."
+                        )
+                    return response
+                delay = _retry_after(response) or min(2 ** attempt, 16) + random.uniform(0, 0.6)
+                self._throttle.back_off(delay)
+                time.sleep(delay)
+                continue
+
+            return response
+
+        raise ScreenerParseError(f"Request to {url} failed: {last}")
 
     def login(self, username: str | None = None, password: str | None = None) -> None:
         username = username or screener_username()
@@ -570,7 +660,7 @@ class ScreenerClient:
             )
 
         try:
-            page = self.session.get(LOGIN_URL, timeout=self.timeout)
+            page = self._request(LOGIN_URL)
             page.raise_for_status()
         except requests.RequestException as exc:
             raise ScreenerAuthError(f"Could not reach Screener.in: {exc}") from exc
@@ -583,8 +673,9 @@ class ScreenerClient:
             raise ScreenerAuthError("Screener.in login page returned no CSRF token.")
 
         try:
-            response = self.session.post(
+            response = self._request(
                 LOGIN_URL,
+                method="POST",
                 data={
                     "csrfmiddlewaretoken": token,
                     "username": username,
@@ -592,7 +683,6 @@ class ScreenerClient:
                     "next": "",
                 },
                 headers={"Referer": LOGIN_URL},
-                timeout=self.timeout,
                 allow_redirects=True,
             )
         except requests.RequestException as exc:
@@ -617,7 +707,7 @@ class ScreenerClient:
         if not self.logged_in:
             return None
         try:
-            page = self.session.get(f"{BASE_URL}/home/", timeout=self.timeout)
+            page = self._request(f"{BASE_URL}/home/")
         except requests.RequestException:
             return None
         markers = ("upgrade to premium", "subscribe to premium", "start free trial")
@@ -633,7 +723,7 @@ class ScreenerClient:
         for template in urls:
             url = template.format(symbol=symbol)
             try:
-                response = self.session.get(url, timeout=self.timeout)
+                response = self._request(url)
             except requests.RequestException as exc:
                 last_error = exc
                 continue
@@ -676,10 +766,9 @@ class ScreenerClient:
         summary of an earnings call is exactly the kind of thing that should not be
         invented next to a buy signal.
         """
-        response = self.session.get(
+        response = self._request(
             f"{BASE_URL}/concalls/summary/{summary_id}/",
             headers={"X-Requested-With": "XMLHttpRequest"},
-            timeout=self.timeout,
         )
         if response.status_code >= 400:
             return ""
@@ -700,7 +789,7 @@ class ScreenerClient:
             return None, None
         cached = self._industry_cache.get(company.industry_url)
         if cached is None:
-            response = self.session.get(company.industry_url, timeout=self.timeout)
+            response = self._request(company.industry_url)
             if response.status_code >= 400:
                 return None, None
             cached = parse_industry_table(response.text)

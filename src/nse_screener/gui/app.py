@@ -53,6 +53,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from nse_screener.classification import ClassificationStore, Source, rank_within_industry
+from nse_screener.concall import extract_takeaways
 from nse_screener.config import resolve_path
 from nse_screener.gui.kite_dialog import KiteSettingsDialog
 from nse_screener.gui.login_dialog import ScreenerLoginDialog
@@ -193,9 +194,16 @@ class ScreenerWindow(QMainWindow):
         self.table.setHorizontalHeaderLabels(COLUMNS)
         self.table.setAlternatingRowColors(True)
         self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.setColumnWidth(1, 190)
-        self.table.setColumnWidth(3, 145)
-        self.table.setColumnWidth(COL_DESC, 320)
+        # Concall takeaways run to 5 positive + 3 negative pointers, so the description
+        # cell needs real width and wrapping, and rows must size to their content rather
+        # than clipping to a single line.
+        self.table.setWordWrap(True)
+        self.table.setColumnWidth(1, 150)
+        self.table.setColumnWidth(COL_TIER, 145)
+        self.table.setColumnWidth(COL_DESC, 470)
+        self.table.verticalHeader().setDefaultAlignment(
+            Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight
+        )
         self.table.itemSelectionChanged.connect(self._on_row_selected)
         self.table.cellDoubleClicked.connect(self._on_cell_double_clicked)
         splitter.addWidget(self.table)
@@ -669,7 +677,26 @@ class ScreenerWindow(QMainWindow):
             self.table.setCellWidget(row, COL_WATCH, self._watch_widget(stock))
 
         self.table.blockSignals(False)
+        self._fit_rows()
         self._report_unresolved()
+
+    def _fit_rows(self) -> None:
+        """Size every row to its tallest cell so no takeaway is clipped.
+
+        resizeRowsToContents alone under-measures a wrapped cell whose column was resized
+        after the item was set, so the description height is computed explicitly from the
+        line count and used as a floor.
+        """
+        self.table.resizeRowsToContents()
+        metrics = self.table.fontMetrics()
+        line_height = metrics.lineSpacing()
+
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, COL_DESC)
+            lines = item.text().count("\n") + 1 if item else 1
+            needed = lines * line_height + 10
+            if self.table.rowHeight(row) < needed:
+                self.table.setRowHeight(row, needed)
 
     def _leader_tooltip(self, industry: str, rank: int | None, total: int | None) -> str:
         entry = self.leadership_tab.entry_for(industry)
@@ -719,28 +746,37 @@ class ScreenerWindow(QMainWindow):
         self.watchlist_tab.refresh()
 
     def _describe(self, stock: ScoredStock, full: bool = False) -> str:
-        """Business USP and latest concall note, quoted from Screener.in.
+        """Concall takeaways and business USP, quoted from Screener.in.
 
-        Never generated here - if Screener.in has no summary for a company, the cell says
-        so and the detail card carries the transcript link instead.
+        Sentences come from Screener's own summary; only the positive/negative split is
+        inferred here, by keyword matching. The detail card keeps the transcript link so
+        the classification can be checked against the source.
         """
         company = self._result.store.get(stock.symbol) if self._result and self._result.store else None
         if company is None:
             return ""
 
-        parts: list[str] = []
+        lines: list[str] = []
         if company.concall_summary:
-            label = f"Concall {company.concall_date}".strip()
-            parts.append(f"{label}: {company.concall_summary}")
-        if company.key_points:
-            parts.append("USP: " + " ".join(company.key_points[:3]))
-        elif company.about:
-            parts.append(company.about)
-        if not parts:
-            return "no Screener.in description available"
+            takeaways = extract_takeaways(company.concall_summary)
+            if not takeaways.empty:
+                header = f"Concall {company.concall_date}".strip()
+                lines.append(f"{header} - {len(takeaways.positives)} positive, "
+                             f"{len(takeaways.negatives)} negative:")
+                lines.extend(takeaways.as_pointers())
 
-        text = " | ".join(parts).replace("\n", " ")
-        return text if full else (text[:190] + ("..." if len(text) > 190 else ""))
+        if not lines:
+            if company.key_points:
+                lines.append("USP: " + " ".join(company.key_points[:2]))
+            elif company.about:
+                lines.append(company.about[:220])
+            else:
+                return "no Screener.in concall summary available"
+
+        if full and company.about:
+            lines.append("")
+            lines.append(company.about[:400])
+        return "\n".join(lines)
 
     def _render_cards(self, toggles: dict[str, bool]) -> None:
         finalists = [s for s in self._ranked if s.tier.rank >= Tier.QUALITY_GROWER.rank]
@@ -766,8 +802,18 @@ class ScreenerWindow(QMainWindow):
         for point in company.key_points[:6]:
             extra.append(f"    - {point}")
         if company.concall_summary:
-            extra.append(f"    Concall summary ({company.concall_date}):")
-            extra.extend(f"      {line}" for line in company.concall_summary.splitlines()[:10])
+            takeaways = extract_takeaways(company.concall_summary)
+            extra.append(f"    Concall takeaways ({company.concall_date}):")
+            for t in takeaways.positives:
+                extra.append(f"      + {t.pointer}")
+            for t in takeaways.negatives:
+                extra.append(f"      - {t.pointer}")
+            extra.append(
+                f"      [positive/negative split is keyword-based over {takeaways.source_points} "
+                f"Screener.in points - verify against the transcript]"
+            )
+            for date_label, kind, url in company.concall_links[:1]:
+                extra.append(f"      {date_label} {kind}: {url}")
         elif company.concall_links:
             extra.append("    No Screener.in concall summary available. Transcripts:")
             for date_label, kind, url in company.concall_links[:3]:
