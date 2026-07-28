@@ -1,0 +1,22 @@
+{
+  "sector_leadership": {
+    "conditions": {
+      "sales_growth_3y": {
+        "enabled": true,
+        "min": 10.0
+      },
+      "profit_growth_3y": {
+        "enabled": true,
+        "min": 10.0
+      },
+      "opm_expanding": {
+        "enabled": true
+      },
+      "roce": {
+        "enabled": true,
+        "min": 12.0
+      }
+    },
+    "min_companies": 8
+  }
+}

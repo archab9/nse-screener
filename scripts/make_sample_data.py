@@ -150,6 +150,77 @@ def write(path: Path, header: list[str], rows: list[list]) -> None:
     print(f"  {path.relative_to(ROOT)}  ({len(rows)} rows)")
 
 
+def _write_sector_reference() -> None:
+    """A stand-in for the bulk Screener.in sector export.
+
+    Headers deliberately use Screener's on-screen column wording rather than the loader's
+    internal field names, so the alias matching in sector_reference.py is exercised.
+    Industry sizes are chosen to straddle the 8-company gate: Aerospace & Defense has 10
+    (computed), Petroleum Products has 4 (suppressed as insufficient sample).
+    """
+    industries = {
+        # (sector, industry, n_companies, n_passing)
+        ("Industrials", "Aerospace & Defense"): (10, 7),      # 70% -> leadership-aligned
+        ("Financial Services", "Private Sector Bank"): (12, 6),  # 50% -> watch
+        ("Materials", "Cement & Cement Products"): (9, 2),    # 22% -> not flagged
+        ("Energy", "Petroleum Products"): (4, 3),             # below the gate
+    }
+
+    rows = []
+    counter = 0
+    for (sector, industry), (total, passing) in industries.items():
+        for i in range(total):
+            counter += 1
+            good = i < passing
+            # Two companies per industry clear everything EXCEPT ROCE. Without them every
+            # company would pass or fail all four conditions at once, and toggling a
+            # condition off would never change a single number - which would make the
+            # toggle look correct even if it were broken.
+            borderline = passing <= i < passing + 2
+            rows.append([
+                f"SYM{counter:03d}", f"{industry} Co {i + 1}", sector, industry,
+                f"{industry} - sub",
+                18.0 if (good or borderline) else 4.0,    # sales growth 3Y
+                22.0 if (good or borderline) else 3.0,    # profit growth 3Y
+                19.0 if (good or borderline) else 11.0,   # OPM
+                15.0 if (good or borderline) else 12.0,   # OPM preceding year
+                20.0 if good else 8.0,                    # ROCE - the discriminator
+                0.4, 12000 - counter * 50,
+            ])
+
+    # Two real symbols so the classification path can be exercised end to end.
+    rows.append(["HAL", "Hindustan Aeronautics", "Industrials", "Aerospace & Defense",
+                 "Aerospace & Defense", 20.0, 25.0, 21.0, 18.0, 32.0, 0.0, 305175])
+    rows.append(["BEL", "Bharat Electronics", "Industrials", "Aerospace & Defense",
+                 "Aerospace & Defense", 17.0, 21.0, 26.0, 24.0, 38.0, 0.0, 288005])
+
+    # The stub-fundamentals companies, so the local demo resolves against this file.
+    # PICCADIL is left out ON PURPOSE - it demonstrates the Unresolved state, which must
+    # look different from "evaluated and did not qualify".
+    demo = [
+        ("NEWGEN", "Industrials", "Aerospace & Defense", True),
+        ("AJAXENGG", "Industrials", "Aerospace & Defense", True),
+        ("KALYANKJIL", "Financial Services", "Private Sector Bank", False),
+        ("VSSL", "Materials", "Cement & Cement Products", False),
+        ("BLKASHYAP", "Materials", "Cement & Cement Products", False),
+    ]
+    for symbol, sector, industry, good in demo:
+        rows.append([
+            symbol, symbol.title(), sector, industry, f"{industry} - sub",
+            18.0 if good else 4.0, 22.0 if good else 3.0,
+            19.0 if good else 11.0, 15.0 if good else 12.0,
+            20.0 if good else 8.0, 0.4, 9000,
+        ])
+
+    write(
+        ROOT / "data" / "sector_reference" / "screener_sector_export.csv",
+        ["NSE Code", "Name", "Sector", "Industry", "Basic Industry",
+         "Sales growth 3Years", "Profit growth 3Years", "OPM", "OPM last year",
+         "ROCE", "Debt to equity", "Market Capitalization"],
+        rows,
+    )
+
+
 def main() -> None:
     print("Writing stub fundamentals (INVENTED VALUES - fixture only):")
 
@@ -196,6 +267,8 @@ def main() -> None:
             for i in range(len(p["promoter"]))
         ],
     )
+
+    _write_sector_reference()
 
     # NSE sectoral index PE/PB - real indices, PLACEHOLDER values pending a live pull.
     write(

@@ -4,7 +4,21 @@
   "paths": {
     "chartink_csv": "data/stage1/VOLUME SCAN.csv",
     "fundamentals_dir": "data/fundamentals",
-    "sector_index_csv": "data/nse/sector_index_valuation.csv"
+    "sector_index_csv": "data/nse/sector_index_valuation.csv",
+    "sector_reference_dir": "data/sector_reference"
+  },
+
+  "sector_leadership": {
+    "_note": "Breadth of fundamental improvement across each Industry. An EARLY SIGNAL of a re-rating already visible in the financials - never a prediction. Never folded into the P1-P7 core score or any tier.",
+    "min_companies": 8,
+    "leadership_aligned_min_pct": 60.0,
+    "watch_min_pct": 40.0,
+    "conditions": {
+      "sales_growth_3y": { "enabled": true, "min": 10.0 },
+      "profit_growth_3y": { "enabled": true, "min": 10.0 },
+      "opm_expanding": { "enabled": true },
+      "roce": { "enabled": true, "min": 12.0 }
+    }
   },
 
   "stage2": {

@@ -52,18 +52,20 @@ from PyQt6.QtWidgets import (
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from nse_screener.classification import ClassificationStore, Source, rank_within_industry
 from nse_screener.config import resolve_path
 from nse_screener.gui.kite_dialog import KiteSettingsDialog
 from nse_screener.gui.login_dialog import ScreenerLoginDialog
+from nse_screener.gui.sector_leadership_tab import SectorLeadershipTab
 from nse_screener.gui.sectors_tab import SectorsTab
 from nse_screener.gui.thresholds_tab import ThresholdsTab
 from nse_screener.gui.watchlist_tab import WatchlistTab
+from nse_screener.sector_history import SectorHistory
 from nse_screener.market.kite import TokenState, build_login_url, check_token, complete_login
 from nse_screener.models import P8_ID, PARAM_IDS, PARAM_NAMES, RunContext, ScoredStock, Tier
 from nse_screener.pipeline import LIVE, LOCAL, PipelineResult, reevaluate, run_pipeline
 from nse_screener.report import format_detail_card
 from nse_screener.scoring import score_all, summary_line
-from nse_screener.sectors import is_sector_leader, leader_reason
 from nse_screener.stage1.symbols import hits_from_text, load_symbol_file
 from nse_screener.stage2.screener_client import has_credentials
 from nse_screener.watchlist import Watchlist, WatchState
@@ -84,11 +86,14 @@ SEVERITY_STYLE = {
 LEADER_BG = QColor("#c8e6c9")   # tailwind sector AND top-3 by market cap
 LEADER_FG = QColor("#1b5e20")
 
+UNRESOLVED_BG = QColor("#f5f5f5")
+UNRESOLVED_FG = QColor("#6a1b9a")
+
 COLUMNS = [
-    "Ticker", "Sector", "Score", "Tier", "Tailwind",
+    "Ticker", "Sector", "Industry", "Score", "Tier", "Tailwind",
     "PEGY", "PB", "Watchlist", "Description", "Key flags",
 ]
-COL_TAILWIND, COL_WATCH, COL_DESC = 4, 7, 8
+COL_INDUSTRY, COL_TIER, COL_TAILWIND, COL_WATCH, COL_DESC = 2, 4, 5, 8, 9
 
 INPUT_CSV, INPUT_TXT, INPUT_MANUAL = "csv", "txt", "manual"
 
@@ -115,11 +120,17 @@ class ScreenerWindow(QMainWindow):
         self._checkboxes: dict[str, QCheckBox] = {}
         self._input_path: Path | None = None
         self._watchlist = Watchlist.load()
+        self._history = SectorHistory.load()
+        self._classification = ClassificationStore.load()
 
         self.tabs = QTabWidget()
         self.setCentralWidget(self.tabs)
 
         self.tabs.addTab(self._build_screener_tab(), "Screener")
+
+        self.leadership_tab = SectorLeadershipTab(self._history)
+        self.leadership_tab.changed.connect(self._on_leadership_changed)
+        self.tabs.addTab(self.leadership_tab, "Sector Leadership")
 
         self.thresholds_tab = ThresholdsTab()
         self.thresholds_tab.changed.connect(self._on_thresholds_changed)
@@ -160,8 +171,11 @@ class ScreenerWindow(QMainWindow):
         layout.addWidget(self.summary)
 
         legend = QLabel(
-            "Green row = in a tailwind sector AND top-3 by market cap in its Screener.in industry."
+            "Green row = the stock's Industry is leadership-aligned (early signal) AND the "
+            "stock is top-3 by core score among stocks scored here in that Industry.   "
+            "Purple ticker = Sector unresolved, so it could not be evaluated at all."
         )
+        legend.setWordWrap(True)
         legend.setStyleSheet("color:#1b5e20; font-size:11px; padding:2px;")
         layout.addWidget(legend)
 
@@ -174,6 +188,7 @@ class ScreenerWindow(QMainWindow):
         self.table.setColumnWidth(3, 145)
         self.table.setColumnWidth(COL_DESC, 320)
         self.table.itemSelectionChanged.connect(self._on_row_selected)
+        self.table.cellDoubleClicked.connect(self._on_cell_double_clicked)
         splitter.addWidget(self.table)
 
         self.cards = QTextEdit()
@@ -490,11 +505,31 @@ class ScreenerWindow(QMainWindow):
 
     # ----------------------------------------------------------------- rendering
 
+    def _on_leadership_changed(self) -> None:
+        """Reference data or a breadth setting changed - re-resolve and re-highlight.
+
+        Resolution is re-run here as well as after a screening run, because a refreshed
+        reference export can classify stocks that were previously Unresolved.
+        """
+        if self._result is not None:
+            self._resolve_classifications()
+            self._render_table(self._toggles())
+
+    def _resolve_classifications(self) -> None:
+        """Resolve every tracked symbol, whatever path it arrived by.
+
+        The Chartink CSV carries no Sector/Industry, so CSV-imported stocks need this
+        exactly as much as typed or text-file ones. One code path for all three.
+        """
+        symbols = [s.symbol for s in self._result.stocks] if self._result else []
+        self._classification.resolve(symbols, self.leadership_tab.reference())
+
     def _render(self, rerun_banners: bool = True) -> None:
         if self._result is None:
             return
         toggles = self._toggles()
         self._ranked = score_all(self._result.stocks, toggles)
+        self._resolve_classifications()
 
         if rerun_banners:
             self._render_banners(self._result.context)
@@ -537,16 +572,30 @@ class ScreenerWindow(QMainWindow):
         self.table.setRowCount(len(self._ranked))
         self.table.setColumnHidden(COL_TAILWIND, not show_p8)
 
+        aligned = self.leadership_tab.leadership_industries()
+        ranks = rank_within_industry(self._ranked, self._classification)
+
         for row, stock in enumerate(self._ranked):
             flags = "; ".join(
                 f.message for f in stock.all_flags
                 if f.severity in ("risk", "positive") and (show_p8 or f.param_id != P8_ID)
             )
-            leader = show_p8 and is_sector_leader(stock)
+            classification = self._classification.get(stock.symbol)
+            unresolved = not classification.resolved
+            industry = classification.industry
+
+            # Green requires BOTH: a leadership-aligned Industry, and a top-3 core score
+            # among the stocks scored here in that same Industry. Unresolved stocks are
+            # excluded by definition - they cannot be evaluated.
+            rank, total = ranks.get(stock.symbol, (None, None))
+            leader = (
+                not unresolved and industry in aligned and rank is not None and rank <= 3
+            )
 
             values = [
                 stock.symbol,
-                stock.industry or "-",
+                classification.sector or stock.industry or "-",
+                "Unresolved" if unresolved else industry,
                 f"{stock.score_display}  ({stock.pct_of_max:.0f}%)",
                 stock.tier.value,
                 ("Yes" if stock.sector_tailwind else "No") if show_p8 else "",
@@ -560,7 +609,7 @@ class ScreenerWindow(QMainWindow):
                 if col == COL_WATCH:
                     continue
                 item = QTableWidgetItem(value)
-                if col == 3:
+                if col == COL_TIER:
                     item.setForeground(QColor(TIER_COLOURS[stock.tier]))
                     font = item.font()
                     font.setBold(True)
@@ -569,7 +618,18 @@ class ScreenerWindow(QMainWindow):
                     item.setBackground(LEADER_BG)
                     if col == 0:
                         item.setForeground(LEADER_FG)
-                        item.setToolTip(leader_reason(stock))
+                        item.setToolTip(self._leader_tooltip(industry, rank, total))
+                elif unresolved:
+                    # Visually distinct from "evaluated and did not qualify" - a silent
+                    # miss here is worse than an error.
+                    item.setBackground(UNRESOLVED_BG)
+                    if col in (0, COL_INDUSTRY):
+                        item.setForeground(UNRESOLVED_FG)
+                        item.setToolTip(
+                            "Sector unresolved - not found in the sector reference export, "
+                            "so this stock is excluded from leadership highlighting. "
+                            "Set it by hand on the Sector Leadership tab, or refresh the export."
+                        )
                 if col == COL_DESC:
                     item.setToolTip(self._describe(stock, full=True))
                 self.table.setItem(row, col, item)
@@ -577,6 +637,32 @@ class ScreenerWindow(QMainWindow):
             self.table.setCellWidget(row, COL_WATCH, self._watch_widget(stock))
 
         self.table.blockSignals(False)
+        self._report_unresolved()
+
+    def _leader_tooltip(self, industry: str, rank: int | None, total: int | None) -> str:
+        entry = self.leadership_tab.entry_for(industry)
+        if entry is None or entry.breadth_pct is None:
+            return f"Ranked #{rank} of {total} scored in {industry}."
+        trend = f" ({entry.trend.label})" if entry.trend.label != "insufficient history" else ""
+        return (
+            f"Industry breadth {entry.breadth_pct:.0f}%{trend} - "
+            f"ranked #{rank} of {total} scored in this Industry."
+        )
+
+    def _report_unresolved(self) -> None:
+        unresolved = [
+            s.symbol for s in self._ranked if not self._classification.get(s.symbol).resolved
+        ]
+        if not unresolved:
+            return
+        if not self.leadership_tab.has_reference():
+            return  # already banner-ed as "no reference data"
+        self._add_banner(
+            "warning",
+            f"{len(unresolved)} stock(s) unresolved against the sector reference export and "
+            f"excluded from leadership highlighting: {', '.join(unresolved[:12])}"
+            + (" ..." if len(unresolved) > 12 else ""),
+        )
 
     def _watch_widget(self, stock: ScoredStock) -> QWidget:
         combo = QComboBox()
@@ -656,6 +742,17 @@ class ScreenerWindow(QMainWindow):
                 f"{company.industry_peer_count} by market cap in {company.industry}"
             )
         return card + "\n".join(extra)
+
+    def _on_cell_double_clicked(self, row: int, column: int) -> None:
+        """Double-clicking the Industry cell opens the manual classification dialog."""
+        if column != COL_INDUSTRY or not (0 <= row < len(self._ranked)):
+            return
+        from nse_screener.gui.classify_dialog import ClassifyDialog
+
+        symbol = self._ranked[row].symbol
+        if ClassifyDialog(symbol, self._classification, self.leadership_tab.reference(), self).exec():
+            self._resolve_classifications()
+            self._render_table(self._toggles())
 
     def _on_row_selected(self) -> None:
         rows = {i.row() for i in self.table.selectedIndexes()}
