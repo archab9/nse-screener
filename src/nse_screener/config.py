@@ -13,7 +13,16 @@ ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = ROOT / "config"
 
 
-USER_THRESHOLDS = CONFIG_DIR / "user_thresholds.json"
+def _user_data_dir() -> Path:
+    base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+    return Path(base) / "nse-screener"
+
+
+# Threshold overrides are USER STATE, not project config, so they live alongside the
+# watchlist under LOCALAPPDATA rather than in the version-controlled config/ directory.
+# They were briefly written into config/ and got committed, which silently changed P2's
+# scoring window for anyone checking the branch out.
+USER_THRESHOLDS = _user_data_dir() / "user_thresholds.json"
 
 
 def _load_json(path: Path) -> dict[str, Any]:

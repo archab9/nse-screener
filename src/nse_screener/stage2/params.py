@@ -15,6 +15,16 @@ from ..models import Flag, ParamResult, Verdict
 from .fundamentals import CompanyFundamentals
 
 
+def _count(cfg: dict, key: str) -> int:
+    """Read a count-like setting as an int.
+
+    Window lengths and 'N of M years' counts index and slice lists, so a float here is a
+    TypeError. The GUI now writes ints, but config files get hand-edited too - a 5.0 in
+    settings.json must not take the whole run down.
+    """
+    return int(cfg[key])
+
+
 def _unknown(param_id: str, reason: str) -> ParamResult:
     return ParamResult(param_id=param_id, verdict=Verdict.UNKNOWN, detail=reason)
 
@@ -42,7 +52,7 @@ def _ttm_series(values: list[float | None]) -> list[float]:
 def evaluate_p1(company: CompanyFundamentals) -> ParamResult:
     """Record financials - TTM sales and profit at a 20-quarter high, plus revenue CAGR."""
     cfg = settings()["p1_record_financials"]
-    quarters = company.sorted_quarterly()[-cfg["lookback_quarters"] :]
+    quarters = company.sorted_quarterly()[-_count(cfg, "lookback_quarters") :]
 
     if len(quarters) < 8:
         return _unknown("P1", f"Need at least 8 quarters, have {len(quarters)}.")
@@ -114,7 +124,7 @@ def _classification_of(company: CompanyFundamentals) -> str:
 def evaluate_p2(company: CompanyFundamentals) -> ParamResult:
     """Capital efficiency - ROCE/ROE on 4-of-5 logic, with a leverage cross-check."""
     cfg = settings()["p2_capital_efficiency"]
-    years = company.sorted_annual()[-cfg["years_window"] :]
+    years = company.sorted_annual()[-_count(cfg, "years_window") :]
     roce = [y.roce_pct for y in years if y.roce_pct is not None]
     roe = [y.roe_pct for y in years if y.roe_pct is not None]
 
@@ -126,7 +136,7 @@ def evaluate_p2(company: CompanyFundamentals) -> ParamResult:
         cfg["roce_min_pct_capital_intensive"] if capital_intensive else cfg["roce_min_pct"]
     )
     roe_bar = cfg["roe_min_pct"]
-    need = cfg["years_required"]
+    need = _count(cfg, "years_required")
 
     roce_hits = sum(1 for v in roce if v >= roce_bar)
     roe_hits = sum(1 for v in roe if v >= roe_bar)
@@ -193,7 +203,7 @@ def evaluate_p2(company: CompanyFundamentals) -> ParamResult:
 def evaluate_p3(company: CompanyFundamentals) -> ParamResult:
     """Free cash flow quality - FCF positive 4-of-5 years and FCF yield >= 2%."""
     cfg = settings()["p3_fcf_quality"]
-    years = company.sorted_annual()[-cfg["years_window"] :]
+    years = company.sorted_annual()[-_count(cfg, "years_window") :]
     fcf = [(y.fy, y.fcf) for y in years if y.fcf is not None]
 
     if len(fcf) < 3:
@@ -219,10 +229,10 @@ def evaluate_p3(company: CompanyFundamentals) -> ParamResult:
         and cfg["fcf_yield_partial_low_pct"] <= fcf_yield < cfg["fcf_yield_min_pct"]
     )
 
-    if positive >= cfg["years_required_yes"] and yield_ok:
+    if positive >= _count(cfg, "years_required_yes") and yield_ok:
         verdict = Verdict.YES
         detail = f"FCF positive {positive}/{len(fcf)} years, FCF yield {fcf_yield:.1f}%."
-    elif positive >= cfg["years_required_partial"] or yield_partial:
+    elif positive >= _count(cfg, "years_required_partial") or yield_partial:
         verdict = Verdict.PARTIAL
         detail = f"FCF positive {positive}/{len(fcf)} years" + (
             f", yield {fcf_yield:.1f}%." if fcf_yield is not None else ", yield not computable."
@@ -242,7 +252,7 @@ def evaluate_p3(company: CompanyFundamentals) -> ParamResult:
 def evaluate_p4(company: CompanyFundamentals) -> ParamResult:
     """Earnings quality - CFO/PAT >= 0.8 in 2 of last 3 FY (spec resolves the 3-vs-2 contradiction)."""
     cfg = settings()["p4_earnings_quality"]
-    years = company.sorted_annual()[-cfg["years_window"] :]
+    years = company.sorted_annual()[-_count(cfg, "years_window") :]
     ratios = [(y.fy, y.cfo_pat) for y in years if y.cfo_pat is not None]
 
     if len(ratios) < 2:
@@ -273,7 +283,7 @@ def evaluate_p4(company: CompanyFundamentals) -> ParamResult:
 
     declining = len(ratios) >= 3 and ratios[-1][1] < ratios[-2][1] < ratios[-3][1]
 
-    if hits >= cfg["years_required"]:
+    if hits >= _count(cfg, "years_required"):
         verdict = Verdict.YES
         detail = f"CFO/PAT >= {cfg['cfo_pat_min']} in {hits} of {len(ratios)} years."
     elif latest >= cfg["partial_band_low"] and not declining:
@@ -299,7 +309,7 @@ def evaluate_p5(company: CompanyFundamentals) -> ParamResult:
     available from Screener.in, so this is a two-signal read, not a three-signal one.
     """
     cfg = settings()["p5_institutional"]
-    points = company.sorted_shareholding()[-cfg["lookback_quarters"] :]
+    points = company.sorted_shareholding()[-_count(cfg, "lookback_quarters") :]
     fii = [(p.quarter, p.fii_pct) for p in points if p.fii_pct is not None]
     dii = [(p.quarter, p.dii_pct) for p in points if p.dii_pct is not None]
 
@@ -352,7 +362,7 @@ def evaluate_p5(company: CompanyFundamentals) -> ParamResult:
 def evaluate_p6(company: CompanyFundamentals) -> ParamResult:
     """Promoter stability. Binary YES/NO per spec - no partial credit."""
     cfg = settings()["p6_promoter"]
-    points = company.sorted_shareholding()[-cfg["lookback_quarters"] :]
+    points = company.sorted_shareholding()[-_count(cfg, "lookback_quarters") :]
     holdings = [(p.quarter, p.promoter_pct) for p in points if p.promoter_pct is not None]
 
     if len(holdings) < 2:

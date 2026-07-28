@@ -19,3 +19,6 @@ data/
 # Credentials never belong here (spec section 9 - keyring or env vars only)
 .env
 *.token
+
+# User state - overrides, watchlist. Never version-controlled.
+config/user_thresholds.json

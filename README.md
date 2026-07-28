@@ -30,8 +30,16 @@ The engine runs end to end against stub fundamentals. What is built:
 ## The four tabs
 
 **Screener** — pick an input, press Generate Results, see the ranked table and detail
-cards. Rows shaded green are in a tailwind sector *and* top-3 by market cap in their
-Screener.in industry. Each row has a watchlist control and a description column.
+cards. Each row has a watchlist control and a description column.
+
+Rows shade green when the stock's Industry is *leadership-aligned (early signal)* **and**
+the stock is top-3 by core score among stocks scored here in that Industry. A purple
+ticker means the Sector is **Unresolved** — deliberately distinct from "evaluated and
+didn't qualify", so a missing classification can never be mistaken for a considered miss.
+
+The whole thing is optional: untick **Sector leadership overlay** and the Industry column,
+the highlighting and the unresolved marking all disappear. It never affects any score or
+tier either way.
 
 **Thresholds** — every number the rules depend on, editable. Changing one re-evaluates
 the current results immediately without re-fetching, since only the rules changed, not
@@ -41,8 +49,20 @@ the data. Fields differing from the shipped default are highlighted, and there's
 free-text note. "Removed" is a distinct state from "never seen", so a stock you dismissed
 stays dismissed on later runs instead of resurfacing as new.
 
+**Sector Leadership** — breadth of fundamental improvement per Industry, computed from a
+bulk Screener.in sector export. Four toggleable conditions, an 8-company gate below which
+an Industry shows "insufficient sample" rather than a meaningless percentage, quarterly
+snapshots for trend, and a manual Auto / Force Yes / Force No per Industry.
+
 **Sectors** — the five tailwind sectors, their rationale, how stale the review is, and
 which of this run's stocks fall in each (leaders separated from plain members).
+
+## Where state lives
+
+Nothing user-specific is version-controlled. Threshold overrides, the watchlist,
+classification overrides and breadth history all live under
+`%LOCALAPPDATA%\nse-screener\`. Credentials are in Windows Credential Manager. The repo
+holds shipped defaults only.
 
 ## Stage 1 input
 

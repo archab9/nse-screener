@@ -158,6 +158,15 @@ class ScreenerWindow(QMainWindow):
         self.banner_box.setSpacing(4)
         layout.addLayout(self.banner_box)
 
+        # Dedicated label, NOT part of the banner stack. It is refreshed on every table
+        # render, including toggles, which do not clear banners - appending there stacked
+        # a fresh copy on every checkbox click.
+        self.unresolved_label = QLabel()
+        self.unresolved_label.setWordWrap(True)
+        self.unresolved_label.setVisible(False)
+        self.unresolved_label.setStyleSheet(SEVERITY_STYLE["warning"])
+        layout.addWidget(self.unresolved_label)
+
         self.progress = QProgressBar()
         self.progress.setVisible(False)
         layout.addWidget(self.progress)
@@ -170,14 +179,14 @@ class ScreenerWindow(QMainWindow):
         self.summary.setStyleSheet("font-weight:bold; padding:2px;")
         layout.addWidget(self.summary)
 
-        legend = QLabel(
+        self.legend = QLabel(
             "Green row = the stock's Industry is leadership-aligned (early signal) AND the "
             "stock is top-3 by core score among stocks scored here in that Industry.   "
             "Purple ticker = Sector unresolved, so it could not be evaluated at all."
         )
-        legend.setWordWrap(True)
-        legend.setStyleSheet("color:#1b5e20; font-size:11px; padding:2px;")
-        layout.addWidget(legend)
+        self.legend.setWordWrap(True)
+        self.legend.setStyleSheet("color:#1b5e20; font-size:11px; padding:2px;")
+        layout.addWidget(self.legend)
 
         splitter = QSplitter(Qt.Orientation.Vertical)
         self.table = QTableWidget(0, len(COLUMNS))
@@ -284,6 +293,18 @@ class ScreenerWindow(QMainWindow):
         p8.stateChanged.connect(self._on_toggle)
         self._checkboxes[P8_ID] = p8
         row.addWidget(p8)
+
+        # Sector leadership is an optional overlay, same standing as P8: off means the
+        # Industry column, the Unresolved marking and the green highlight all disappear,
+        # and no breadth evaluation is applied to the table at all.
+        self.sector_overlay = QCheckBox("Sector leadership overlay (optional, never scored)")
+        self.sector_overlay.setChecked(True)
+        self.sector_overlay.setToolTip(
+            "Off: no Industry column, no leadership highlighting, no unresolved marking.\n"
+            "The Sector Leadership tab stays available for reviewing breadth on its own."
+        )
+        self.sector_overlay.stateChanged.connect(self._on_overlay_toggle)
+        row.addWidget(self.sector_overlay)
         row.addStretch()
 
         self.run_button = QPushButton("Generate Results")
@@ -330,6 +351,15 @@ class ScreenerWindow(QMainWindow):
     def _show_p8(self) -> bool:
         cb = self._checkboxes.get(P8_ID)
         return cb.isChecked() if cb else True
+
+    def _sector_overlay_on(self) -> bool:
+        return getattr(self, "sector_overlay", None) is None or self.sector_overlay.isChecked()
+
+    def _on_overlay_toggle(self) -> None:
+        """Overlay on/off only affects presentation - no re-score, no re-fetch."""
+        self.legend.setVisible(self._sector_overlay_on())
+        if self._result is not None:
+            self._render_table(self._toggles())
 
     def _input_mode(self) -> str:
         return self.input_combo.currentData()
@@ -572,8 +602,10 @@ class ScreenerWindow(QMainWindow):
         self.table.setRowCount(len(self._ranked))
         self.table.setColumnHidden(COL_TAILWIND, not show_p8)
 
-        aligned = self.leadership_tab.leadership_industries()
-        ranks = rank_within_industry(self._ranked, self._classification)
+        overlay = self._sector_overlay_on()
+        self.table.setColumnHidden(COL_INDUSTRY, not overlay)
+        aligned = self.leadership_tab.leadership_industries() if overlay else set()
+        ranks = rank_within_industry(self._ranked, self._classification) if overlay else {}
 
         for row, stock in enumerate(self._ranked):
             flags = "; ".join(
@@ -581,7 +613,7 @@ class ScreenerWindow(QMainWindow):
                 if f.severity in ("risk", "positive") and (show_p8 or f.param_id != P8_ID)
             )
             classification = self._classification.get(stock.symbol)
-            unresolved = not classification.resolved
+            unresolved = overlay and not classification.resolved
             industry = classification.industry
 
             # Green requires BOTH: a leadership-aligned Industry, and a top-3 core score
@@ -650,19 +682,23 @@ class ScreenerWindow(QMainWindow):
         )
 
     def _report_unresolved(self) -> None:
+        if not self._sector_overlay_on() or not self.leadership_tab.has_reference():
+            self.unresolved_label.setVisible(False)
+            return
+
         unresolved = [
             s.symbol for s in self._ranked if not self._classification.get(s.symbol).resolved
         ]
         if not unresolved:
+            self.unresolved_label.setVisible(False)
             return
-        if not self.leadership_tab.has_reference():
-            return  # already banner-ed as "no reference data"
-        self._add_banner(
-            "warning",
+
+        self.unresolved_label.setText(
             f"{len(unresolved)} stock(s) unresolved against the sector reference export and "
             f"excluded from leadership highlighting: {', '.join(unresolved[:12])}"
-            + (" ..." if len(unresolved) > 12 else ""),
+            + (" ..." if len(unresolved) > 12 else "")
         )
+        self.unresolved_label.setVisible(True)
 
     def _watch_widget(self, stock: ScoredStock) -> QWidget:
         combo = QComboBox()

@@ -146,17 +146,31 @@ def is_modified(section: str, key: str) -> bool:
     return current_value(section, key) != default_value(section, key)
 
 
+def _integer_fields() -> set[tuple[str, str]]:
+    """Fields declared with 0 decimals - counts of years or quarters, never fractional."""
+    return {
+        (group.section, f.key)
+        for group in SCHEMA
+        for f in group.fields
+        if f.decimals == 0 and f.unit in ("years", "quarters", "of window")
+    }
+
+
 def build_overrides(values: dict[tuple[str, str], float]) -> dict[str, dict[str, float]]:
     """Turn {(section, key): value} into the nested shape settings.json uses.
 
     Values equal to the shipped default are omitted, so the override file stays a record
     of what the user actually changed rather than a full copy of the config.
+
+    Count-like fields are written as int. A QDoubleSpinBox yields floats even at zero
+    decimals, and a saved 4.0 crashed the list slicing in params.py.
     """
+    integers = _integer_fields()
     out: dict[str, dict[str, float]] = {}
     for (section, key), value in values.items():
         if value == default_value(section, key):
             continue
-        out.setdefault(section, {})[key] = value
+        out.setdefault(section, {})[key] = int(value) if (section, key) in integers else value
     return out
 
 
