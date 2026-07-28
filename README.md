@@ -98,6 +98,20 @@ only trigger. No scheduler, no background timer.
 python run_app.py
 ```
 
+### Desktop shortcut
+
+```bash
+powershell -ExecutionPolicy Bypass -File scripts\create_shortcut.ps1
+```
+
+Puts an **NSE Screener** shortcut on the Desktop pointing at `pythonw.exe`, so the app
+opens with no console window behind it. Regenerate the icon with
+`python scripts\make_icon.py` if it goes missing.
+
+Startup is logged to `%LOCALAPPDATA%\nse-screener\launch.log`. A double-clicked shortcut
+has no console attached, so without that log a failure during startup would leave you with
+a process that does nothing and no way to see why.
+
 Upload your Chartink scan export with the **Upload CSV...** button, pick the fundamentals
 source, and press Generate Results.
 
