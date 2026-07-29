@@ -27,12 +27,24 @@ def app():
 
 @pytest.fixture
 def window(app, tmp_path, monkeypatch):
+    from PyQt6.QtWidgets import QMessageBox
+
     from nse_screener import watchlist as watchlist_module
 
     # Keep the test off the real user's watchlist / classification files.
     monkeypatch.setattr(watchlist_module, "default_path", lambda: tmp_path / "watchlist.json")
+
+    # generate() prompts to log in when the Kite access token has expired - correct for a
+    # person at the keyboard, but a modal with nobody to dismiss it hangs the suite. Kite
+    # tokens expire daily, so without this the tests pass or hang depending on the hour.
+    monkeypatch.setattr(
+        QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.StandardButton.No)
+    )
+
     window = ScreenerWindow()
     window.show()
+    window._runs.path = tmp_path / "run_history.json"
+    window._runs.runs = []
     window.source_combo.setCurrentIndex(1)   # saved local export
     window.input_combo.setCurrentIndex(2)    # typed symbols
     window.manual_box.setPlainText("NEWGEN AJAXENGG PICCADIL")
@@ -90,6 +102,34 @@ class TestBannersDoNotAccumulate:
         for i in range(6):
             window.sector_overlay.setChecked(i % 2 == 0)
         assert window.banner_box.count() == baseline
+
+
+class TestRunHistoryTab:
+    def test_a_run_is_recorded_automatically(self, window):
+        assert len(window._runs.runs) == 1
+        assert window._runs.runs[0].scored_count == window.table.rowCount()
+
+    def test_history_tab_lists_the_run(self, window):
+        assert window.history_tab.table.rowCount() == window.table.rowCount()
+
+    def test_sorted_by_parameters_hit_descending(self, window):
+        hits = [
+            int(window.history_tab.table.item(r, 1).text().split()[0])
+            for r in range(window.history_tab.table.rowCount())
+        ]
+        assert hits == sorted(hits, reverse=True), hits
+
+    def test_clicking_a_stock_shows_its_breakdown(self, window):
+        window.history_tab.table.selectRow(0)
+        text = window.history_tab.detail.toPlainText()
+        symbol = window.history_tab.table.item(0, 0).text()
+        assert symbol in text
+        assert "parameters hit:" in text
+        assert "P1 Record financials" in text
+
+    def test_second_run_appends(self, window):
+        window.generate()
+        assert len(window._runs.runs) == 2
 
 
 class TestUnresolvedIsVisiblyDistinct:

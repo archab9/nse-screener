@@ -49,6 +49,11 @@
     "fundamentals_max_age_days": 100
   },
 
+  "history": {
+    "_note": "Rolling window of screening runs kept on disk. Older runs are pruned on save.",
+    "retention_days": 30
+  },
+
   "p1_record_financials": {
     "lookback_quarters": 20,
     "revenue_cagr_min_pct": 12.0

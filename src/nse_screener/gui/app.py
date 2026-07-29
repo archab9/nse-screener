@@ -57,10 +57,12 @@ from nse_screener.concall import extract_takeaways
 from nse_screener.config import resolve_path
 from nse_screener.gui.kite_dialog import KiteSettingsDialog
 from nse_screener.gui.login_dialog import ScreenerLoginDialog
+from nse_screener.gui.history_tab import HistoryTab
 from nse_screener.gui.sector_leadership_tab import SectorLeadershipTab
 from nse_screener.gui.sectors_tab import SectorsTab
 from nse_screener.gui.thresholds_tab import ThresholdsTab
 from nse_screener.gui.watchlist_tab import WatchlistTab
+from nse_screener.run_history import RunHistory
 from nse_screener.sector_history import SectorHistory
 from nse_screener.market.kite import TokenState, build_login_url, check_token, complete_login
 from nse_screener.models import P8_ID, PARAM_IDS, PARAM_NAMES, RunContext, ScoredStock, Tier
@@ -123,11 +125,15 @@ class ScreenerWindow(QMainWindow):
         self._watchlist = Watchlist.load()
         self._history = SectorHistory.load()
         self._classification = ClassificationStore.load()
+        self._runs = RunHistory.load()
 
         self.tabs = QTabWidget()
         self.setCentralWidget(self.tabs)
 
         self.tabs.addTab(self._build_screener_tab(), "Screener")
+
+        self.history_tab = HistoryTab(self._runs)
+        self.tabs.addTab(self.history_tab, "History")
 
         self.leadership_tab = SectorLeadershipTab(self._history)
         self.leadership_tab.changed.connect(self._on_leadership_changed)
@@ -468,6 +474,24 @@ class ScreenerWindow(QMainWindow):
             self.progress.setVisible(False)
 
         self._render()
+        self._record_run(source)
+
+    def _record_run(self, source: str) -> None:
+        """Append this run to the rolling history. Never let a save failure lose the run
+        that was just computed - the results on screen are still valid."""
+        if self._result is None or not self._ranked:
+            return
+        try:
+            self._runs.record(
+                self._ranked,
+                self._toggles(),
+                stage1_count=self._result.context.stage1_count,
+                data_source=source,
+            )
+            self._runs.save()
+            self.history_tab.refresh()
+        except OSError as exc:
+            self._add_banner("warning", f"Run computed but not saved to history: {exc}")
 
     def _collect_hits(self) -> tuple[list | None, str]:
         """Resolve the stage-1 list. Returns (hits, error). hits=None means 'read the CSV'."""

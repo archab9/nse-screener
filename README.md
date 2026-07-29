@@ -49,6 +49,13 @@ the data. Fields differing from the shipped default are highlighted, and there's
 free-text note. "Removed" is a distinct state from "never seen", so a stock you dismissed
 stays dismissed on later runs instead of resurfacing as new.
 
+**History** — every run is recorded automatically and kept for 30 days. Stocks are listed
+**most parameters hit first**, where a "hit" is a YES verdict on an active parameter.
+That is deliberately not the same as the core score: four YES and three NO (8 points)
+means more individual tests passed than seven PARTIAL (7 points). Click any stock for its
+full parameter breakdown with the underlying numbers, every flag raised, and each earlier
+run it appeared in. Use the dropdown to view one run or the whole window.
+
 **Sector Leadership** — breadth of fundamental improvement per Industry, computed from a
 bulk Screener.in sector export. Four toggleable conditions, an 8-company gate below which
 an Industry shows "insufficient sample" rather than a meaningless percentage, quarterly
@@ -228,6 +235,15 @@ quarter has probably reported by then.
 ```bash
 python -m pytest tests/ -q
 ```
+
+An end-to-end sweep drives the assembled app the way a person does — loads data, presses
+the button, toggles things, reads the table:
+
+```bash
+python scripts\verify_app.py
+```
+
+Add `--offline` to skip the checks that hit Screener.in.
 
 ## Not investment advice
 
