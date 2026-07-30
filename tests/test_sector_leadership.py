@@ -75,7 +75,7 @@ class TestReferenceImport:
     def test_screener_header_wording_is_matched_by_alias(self, tmp_path):
         write_reference(tmp_path / "ref", [row("AAA", "Aerospace & Defense")])
         reference = load_sector_reference(tmp_path / "ref")
-        assert reference.missing_columns == []
+        assert reference.missing_columns == [], "optional ROE columns must not be reported"
         assert reference.rows[0].industry == "Aerospace & Defense"
         assert reference.rows[0].roce == 20.0
 

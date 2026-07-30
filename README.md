@@ -51,16 +51,29 @@ stock's latest recorded run. Click any stock for the same full detail History sh
 pipeline in one press. "Removed" is a distinct state from "never seen", so a stock you
 dismissed stays dismissed instead of resurfacing as new.
 
-## Sector leadership
+## Peer rank and market cap
 
-Two separate things, deliberately:
+Every stock on every tab carries two extra columns:
 
-- **Per-stock, on every tab** — is this stock **top 3 by market cap in its own industry**,
-  and which industry. Taken from Screener.in's own industry table, so it's a checkable
-  fact. Shown as a column, as a green row, and in the detail view. Toggle it off with
-  **Sector leadership overlay**.
-- **Sector Leadership tab** — the broader breadth study, which is a different question
-  (how widely fundamentals are improving across an industry) and stays on its own tab.
+**Cap** — Large / Mid / Small / Micro. SEBI classifies by *rank* (top 100 large, next 150
+mid, rest small), not by an absolute figure, so when the bulk sector export is loaded the
+true rank is used; otherwise the app falls back to configured rupee thresholds and will
+disagree at the boundaries.
+
+**Peer rank** — where the stock sits against its **subsector** and its **sector** on
+**share price return over 1, 3 and 5 years**, with ROCE and growth as supporting context.
+A stock can lead on one horizon and lag on another, so all three are ranked separately and
+shown in the detail view. Rank 1 is the best performer in the group; companies not
+reporting a metric leave that metric's denominator rather than counting as last.
+
+This replaced a top-3-by-market-cap flag that was blank for nearly every stock and
+returned nothing at all for smaller names Screener's industry table omits.
+
+Ranking needs the bulk sector export to include **Return over 1year / 3years / 5years**.
+Without those columns the Peer rank column reads `-` and everything else still works.
+
+The **Sector Leadership tab** is separate: it studies how widely fundamentals are
+improving across an industry, which is a different question.
 
 **History** — every run is recorded automatically and kept for 30 days. Stocks are listed
 **most parameters hit first**, where a "hit" is a YES verdict on an active parameter.

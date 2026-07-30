@@ -190,13 +190,19 @@ def _write_sector_reference() -> None:
                 15.0 if (good or borderline) else 12.0,   # OPM preceding year
                 20.0 if good else 8.0,                    # ROCE - the discriminator
                 0.4, 12000 - counter * 50,
+                # Share price return 1y / 3y / 5y, spread so ranks differ per horizon.
+                round((62.0 if good else 4.0) - i * 3.1, 1),
+                round((140.0 if good else 12.0) - i * 5.5, 1),
+                round((210.0 if good else 20.0) - i * 8.0, 1),
             ])
 
     # Two real symbols so the classification path can be exercised end to end.
     rows.append(["HAL", "Hindustan Aeronautics", "Industrials", "Aerospace & Defense",
-                 "Aerospace & Defense", 20.0, 25.0, 21.0, 18.0, 32.0, 0.0, 305175])
+                 "Aerospace & Defense", 20.0, 25.0, 21.0, 18.0, 32.0, 0.0, 305175,
+                 71.4, 305.0, 620.0])
     rows.append(["BEL", "Bharat Electronics", "Industrials", "Aerospace & Defense",
-                 "Aerospace & Defense", 17.0, 21.0, 26.0, 24.0, 38.0, 0.0, 288005])
+                 "Aerospace & Defense", 17.0, 21.0, 26.0, 24.0, 38.0, 0.0, 288005,
+                 58.2, 268.0, 540.0])
 
     # The stub-fundamentals companies, so the local demo resolves against this file.
     # PICCADIL is left out ON PURPOSE - it demonstrates the Unresolved state, which must
@@ -214,13 +220,15 @@ def _write_sector_reference() -> None:
             18.0 if good else 4.0, 22.0 if good else 3.0,
             19.0 if good else 11.0, 15.0 if good else 12.0,
             20.0 if good else 8.0, 0.4, 9000,
+            68.0 if good else 3.0, 155.0 if good else 9.0, 240.0 if good else 15.0,
         ])
 
     write(
         ROOT / "data" / "sector_reference" / "screener_sector_export.csv",
         ["NSE Code", "Name", "Sector", "Industry", "Basic Industry",
          "Sales growth 3Years", "Profit growth 3Years", "OPM", "OPM last year",
-         "ROCE", "Debt to equity", "Market Capitalization"],
+         "ROCE", "Debt to equity", "Market Capitalization",
+         "Return over 1year", "Return over 3years", "Return over 5years"],
         rows,
     )
 

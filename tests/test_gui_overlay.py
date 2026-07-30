@@ -62,8 +62,8 @@ def green_rows(window) -> int:
 
 
 class TestSectorOverlayToggle:
-    """Sector leadership is now one checkable fact - top 3 by market cap in the stock's
-    own Screener.in industry - so the overlay governs the Sector leader column."""
+    """The overlay now ranks each stock against its subsector and sector on share price
+    return over 1/3/5 years, and governs the Peer rank column."""
 
     def test_on_by_default(self, window):
         assert window.sector_overlay.isChecked() is True
@@ -82,8 +82,8 @@ class TestSectorOverlayToggle:
         assert green_rows(window) == before
         assert window.table.isColumnHidden(COL_LEADER) is False
 
-    def test_only_top_three_are_highlighted(self, window):
-        """NEWGEN is #1 and AJAXENGG #3 in the fixture; VSSL is #11 and must not shade."""
+    def test_only_top_quartile_is_highlighted(self, window):
+        """Highlight marks the best quartile of the subsector, not an arbitrary top-3."""
         leaders = {
             window.table.item(r, 0).text()
             for r in range(window.table.rowCount())
@@ -92,12 +92,20 @@ class TestSectorOverlayToggle:
         assert "NEWGEN" in leaders
         assert "VSSL" not in leaders
 
-    def test_leader_column_names_the_industry(self, window):
+    def test_peer_rank_column_names_metric_and_both_levels(self, window):
         for r in range(window.table.rowCount()):
             if window.table.item(r, 0).text() == "NEWGEN":
-                assert "Software - Application" in window.table.item(r, COL_LEADER).text()
+                text = window.table.item(r, COL_LEADER).text()
+                assert "Price return 1y" in text and "sub" in text and "sec" in text, text
                 return
         pytest.fail("NEWGEN not in table")
+
+    def test_cap_column_classifies_every_row(self, window):
+        from nse_screener.gui.app import COL_CAP
+        from nse_screener.peer_ranking import CAP_ORDER
+
+        for r in range(window.table.rowCount()):
+            assert window.table.item(r, COL_CAP).text() in CAP_ORDER
 
     def test_overlay_never_changes_scores_or_tiers(self, window):
         before = [(s.symbol, s.core_score, s.tier) for s in window._ranked]
@@ -133,7 +141,7 @@ class TestRunHistoryTab:
 
     def test_sorted_by_parameters_hit_descending(self, window):
         hits = [
-            int(window.history_tab.table.item(r, 1).text().split()[0])
+            int(window.history_tab.table.item(r, 2).text().split()[0])
             for r in range(window.history_tab.table.rowCount())
         ]
         assert hits == sorted(hits, reverse=True), hits

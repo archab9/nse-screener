@@ -27,22 +27,25 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from nse_screener.display import (
-    BADGE_LEGEND,
-    format_snapshot_detail,
-    is_leader,
-    leader_short,
-    parameter_badges,
-)
+from nse_screener.display import BADGE_LEGEND, format_snapshot_detail, parameter_badges
 from nse_screener.run_history import RunHistory, StockSnapshot, sort_key
 
 COLUMNS = [
-    "Ticker", "Params hit", "Parameters", "Score", "Tier",
-    "Sector leader", "Biggest positive", "Runs", "Last seen",
+    "Ticker", "Cap", "Params hit", "Parameters", "Score", "Tier",
+    "Peer rank", "Biggest positive", "Runs", "Last seen",
 ]
 
 ALL_RUNS = "__all__"
 LEADER_BG = QColor("#c8e6c9")
+
+
+def _top_quartile(snap) -> bool:
+    """Highlight when the stock sits in the best quartile of its subsector on the primary
+    metric. The old rule was top-3 by market cap, which left almost every row unmarked."""
+    data = (snap.peer_ranks or {}).get("Price return 1y")
+    if not data or not data.get("sub_rank") or (data.get("sub_total") or 0) < 2:
+        return False
+    return (data["sub_rank"] - 1) / (data["sub_total"] - 1) * 100.0 <= 25.0
 
 
 class HistoryTab(QWidget):
@@ -128,15 +131,14 @@ class HistoryTab(QWidget):
         for row, snap in enumerate(self._rows):
             history = self._history.appearances(snap.symbol)
             last_seen = history[0][0].run_date.strftime("%d %b") if history else ""
-            leader = leader_short(snap.industry_rank, snap.industry_peer_count, snap.industry)
-
             values = [
                 snap.symbol,
+                snap.cap_category or "-",
                 snap.hit_display,
                 parameter_badges(snap.verdicts, snap.active_toggles),
                 snap.score_display,
                 snap.tier,
-                leader or "-",
+                snap.peer_summary or "-",
                 snap.headline_positive or "-",
                 str(len(history)),
                 last_seen,
@@ -144,12 +146,12 @@ class HistoryTab(QWidget):
             for col, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                if col == 1:
+                if col == 2:
                     item.setForeground(QColor("#1b5e20"))
                     font = item.font()
                     font.setBold(True)
                     item.setFont(font)
-                if is_leader(snap.industry_rank):
+                if _top_quartile(snap):
                     item.setBackground(LEADER_BG)
                 self.table.setItem(row, col, item)
 

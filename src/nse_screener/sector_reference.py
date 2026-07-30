@@ -10,7 +10,8 @@ How to produce it:
      `Market Capitalization > 100`, so the screen returns the whole covered universe.
   2. Edit Columns and add: Sector, Industry, Basic Industry, Sales growth 3Years,
      Profit growth 3Years, OPM, OPM last year, ROCE, Debt to equity,
-     Market Capitalization, and the NSE code.
+     Market Capitalization, the NSE code, and - for peer ranking -
+     Return over 1year, Return over 3years, Return over 5years.
   3. Export to CSV. If the export truncates, split by market-cap band into 2-3 files and
      drop them all in the configured directory - they are merged on load.
 
@@ -48,9 +49,17 @@ FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "roce": ("roce", "rocepercentage", "roce3yr", "rocelatest"),
     "debt_to_equity": ("debttoequity", "debtequity", "de"),
     "market_cap": ("marketcapitalization", "marketcap", "mcap", "marcap"),
+    # Peer ranking metrics - SHARE PRICE return, not accounting return. Add these in
+    # Screener's Edit Columns as "Return over 1year" / "3years" / "5years".
+    "return_1y": ("returnover1year", "return1year", "1yrreturn", "priceerturn1y", "returnover1yr"),
+    "return_3y": ("returnover3years", "return3years", "3yrsreturn", "returnover3yrs"),
+    "return_5y": ("returnover5years", "return5years", "5yrsreturn", "returnover5yrs"),
 }
 
 REQUIRED = ("symbol", "industry")
+# Peer ranking degrades gracefully without these, so their absence is not a problem
+# worth reporting as a missing column.
+OPTIONAL = ("return_1y", "return_3y", "return_5y")
 
 
 def _key(header: str) -> str:
@@ -83,6 +92,14 @@ class CompanyRow:
     roce: float | None = None
     debt_to_equity: float | None = None
     market_cap: float | None = None
+    return_1y: float | None = None
+    return_3y: float | None = None
+    return_5y: float | None = None
+
+    @property
+    def subsector(self) -> str:
+        """Most specific classification available."""
+        return self.basic_industry or self.industry
 
 
 @dataclass
@@ -220,10 +237,13 @@ def load_sector_reference(directory: Path | str | None = None) -> SectorReferenc
                     roce=_num(value("roce")),
                     debt_to_equity=_num(value("debt_to_equity")),
                     market_cap=_num(value("market_cap")),
+                    return_1y=_num(value("return_1y")),
+                    return_3y=_num(value("return_3y")),
+                    return_5y=_num(value("return_5y")),
                 )
 
     reference.rows = list(merged.values())
-    reference.missing_columns = sorted(missing_union)
+    reference.missing_columns = sorted(m for m in missing_union if m not in OPTIONAL)
     timestamps = [p.stat().st_mtime for p in files]
     reference.loaded_from = datetime.fromtimestamp(max(timestamps)).date()
     return reference

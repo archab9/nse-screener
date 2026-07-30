@@ -88,9 +88,15 @@ def format_snapshot_detail(snap, appearances=None, retention_days: int = 30) -> 
         f"  |  parameters hit: {snap.yes_count}",
     ]
 
-    leader = leader_label(snap.industry_rank, snap.industry_peer_count, snap.industry)
-    if leader:
-        lines.append(f"SECTOR LEADER: {leader}")
+    if snap.cap_category:
+        cap = f"{snap.cap_category}"
+        if snap.market_cap_cr:
+            cap += f"  (Rs {snap.market_cap_cr:,.0f} cr)"
+        lines.append(cap)
+
+    if snap.peer_summary:
+        where = " / ".join(x for x in (snap.peer_subsector, snap.peer_sector) if x)
+        lines.append(f"PEER RANK: {snap.peer_summary}    [{where}]")
 
     if snap.pegy is not None or snap.pb is not None:
         bits = []
@@ -122,6 +128,27 @@ def format_snapshot_detail(snap, appearances=None, retention_days: int = 30) -> 
     elif snap.about:
         lines.append("\nBusiness:")
         lines.append(f"    {snap.about}")
+
+    if snap.peer_ranks:
+        lines.append(
+            f"\nRank among peers  (1 = best; only companies reporting the metric are counted)"
+        )
+        lines.append(f"    subsector: {snap.peer_subsector or 'unknown'}"
+                     f"    sector: {snap.peer_sector or 'unknown'}")
+        lines.append(
+            f"    {'Metric':<18} {'Value':>9}   {'In subsector':<16} {'In sector':<16}"
+        )
+        lines.append(f"    {'-' * 18} {'-' * 9}   {'-' * 16} {'-' * 16}")
+        for label, data in snap.peer_ranks.items():
+            value = data.get("value")
+            sub = (f"#{data['sub_rank']} of {data['sub_total']}"
+                   if data.get("sub_rank") else "-")
+            sec = (f"#{data['sec_rank']} of {data['sec_total']}"
+                   if data.get("sec_rank") else "-")
+            lines.append(
+                f"    {label:<18} {('-' if value is None else f'{value:.1f}'):>9}   "
+                f"{sub:<16} {sec:<16}"
+            )
 
     lines.append("\nParameter detail:")
     for pid in PARAM_IDS + ("P8",):

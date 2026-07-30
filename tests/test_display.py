@@ -157,14 +157,16 @@ class TestSnapshotCarriesNarrative:
 class TestSharedDetailView:
     def test_shows_pass_fail_leader_and_concall(self):
         text = format_snapshot_detail(make_snapshot())
-        assert "SECTOR LEADER: #1 of 25 in Aerospace & Defense" in text
         assert "Passed (4):" in text and "Failed (2):" in text
         assert "Biggest positive:" in text
         assert "+ Won a Rs 1,200 crore order" in text
         assert "- Export demand remained subdued" in text
 
-    def test_non_leader_omits_the_leader_line(self):
-        assert "SECTOR LEADER" not in format_snapshot_detail(make_snapshot(rank=9))
+    def test_cap_category_is_shown_when_known(self):
+        snap = make_snapshot()
+        snap.cap_category = "Mid cap"
+        snap.market_cap_cr = 14500
+        assert "Mid cap" in format_snapshot_detail(snap)
 
     def test_no_concall_falls_back_to_business_text(self):
         text = format_snapshot_detail(make_snapshot(summary=""))

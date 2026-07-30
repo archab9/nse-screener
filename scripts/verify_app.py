@@ -360,7 +360,7 @@ def _():
 @check("GUI - history sorted by parameters hit, most first")
 def _():
     table = _win.history_tab.table
-    hits = [int(table.item(r, 1).text().split()[0]) for r in range(table.rowCount())]
+    hits = [int(table.item(r, 2).text().split()[0]) for r in range(table.rowCount())]
     assert hits == sorted(hits, reverse=True), hits
     names = [table.item(r, 0).text() for r in range(table.rowCount())]
     return " > ".join(f"{n}({h})" for n, h in zip(names, hits))
@@ -376,18 +376,34 @@ def _():
     return f"{len(text)} chars incl. per-parameter evidence and appearances"
 
 
-@check("GUI - sector leader column names the industry")
+@check("GUI - peer rank on price return, subsector and sector")
 def _():
-    from nse_screener.gui.app import COL_LEADER, LEADER_BG
+    from nse_screener.gui.app import COL_CAP, COL_LEADER
 
-    leaders = {
-        _win.table.item(r, 0).text(): _win.table.item(r, COL_LEADER).text()
+    rows = {
+        _win.table.item(r, 0).text(): (
+            _win.table.item(r, COL_CAP).text(), _win.table.item(r, COL_LEADER).text()
+        )
         for r in range(_win.table.rowCount())
-        if _win.table.item(r, 0).background().color() == LEADER_BG
     }
-    assert leaders, "fixture should contain at least one top-3 stock"
-    assert all("in " in v for v in leaders.values()), leaders
-    return "; ".join(f"{k}: {v}" for k, v in leaders.items())
+    ranked = {k: v for k, v in rows.items() if v[1] != "-"}
+    assert ranked, "fixture should rank at least one stock"
+    assert all("Price return 1y" in v[1] and "sub" in v[1] and "sec" in v[1]
+               for v in ranked.values()), ranked
+    from nse_screener.peer_ranking import CAP_ORDER
+    assert all(v[0] in CAP_ORDER for v in rows.values()), rows
+    return "; ".join(f"{k} [{v[0]}] {v[1]}" for k, v in list(ranked.items())[:3])
+
+
+@check("GUI - 1y/3y/5y ranks shown per stock in detail")
+def _():
+    _win.table.selectRow(0)
+    text = _win.cards.toPlainText()
+    for label in ("Price return 1y", "Price return 3y", "Price return 5y"):
+        assert label in text, label
+    assert "In subsector" in text and "In sector" in text
+    start = text.index("Rank among peers")
+    return " | ".join(text[start:start + 620].splitlines()[3:7])
 
 
 @check("GUI - pass/fail badges per parameter")
@@ -413,7 +429,7 @@ def _():
     _win.watchlist_tab.refresh()
 
     table = _win.watchlist_tab.table
-    hits = [int(table.item(r, 1).text().split()[0]) for r in range(table.rowCount())]
+    hits = [int(table.item(r, 2).text().split()[0]) for r in range(table.rowCount())]
     assert hits == sorted(hits, reverse=True), hits
 
     table.selectRow(0)

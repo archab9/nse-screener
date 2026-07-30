@@ -49,6 +49,17 @@
     "fundamentals_max_age_days": 100
   },
 
+  "market_cap": {
+    "_note": "SEBI classifies by RANK (top 100 large, next 150 mid, rest small), not by an absolute figure. When the bulk sector reference export is loaded the true rank is used; the *_cr thresholds are the fallback and will disagree at the boundaries.",
+    "use_rank_when_available": true,
+    "min_universe_for_rank": 250,
+    "large_cap_rank": 100,
+    "mid_cap_rank": 250,
+    "large_cap_cr": 20000,
+    "mid_cap_cr": 5000,
+    "micro_cap_cr": 500
+  },
+
   "history": {
     "_note": "Rolling window of screening runs kept on disk. Older runs are pruned on save.",
     "retention_days": 30

@@ -72,6 +72,13 @@ class StockSnapshot:
     # without re-fetching anything from Screener.in.
     industry_rank: int | None = None
     industry_peer_count: int | None = None
+    market_cap_cr: float | None = None
+    cap_category: str = ""
+    peer_sector: str = ""
+    peer_subsector: str = ""
+    peer_summary: str = ""
+    # metric label -> {"value", "sub_rank", "sub_total", "sec_rank", "sec_total"}
+    peer_ranks: dict[str, dict] = field(default_factory=dict)
     concall_date: str = ""
     concall_positives: list[str] = field(default_factory=list)
     concall_negatives: list[str] = field(default_factory=list)
@@ -123,7 +130,10 @@ class RunRecord:
 
 
 def snapshot_stock(
-    stock: ScoredStock, toggles: dict[str, bool] | None = None, company=None
+    stock: ScoredStock,
+    toggles: dict[str, bool] | None = None,
+    company=None,
+    reference=None,
 ) -> StockSnapshot:
     """Freeze a scored stock, plus the narrative bits needed to display it later.
 
@@ -162,7 +172,26 @@ def snapshot_stock(
     key_points = list(getattr(company, "key_points", []) or [])
     about = getattr(company, "about", "") or ""
 
+    from .peer_ranking import cap_category, rank_symbol
+
+    market_cap = getattr(company, "market_cap_cr", None)
+    ranking = rank_symbol(reference, stock.symbol)
+    peer_ranks = {
+        m.label: {
+            "value": m.subsector.value if m.subsector.value is not None else m.sector.value,
+            "sub_rank": m.subsector.rank, "sub_total": m.subsector.total,
+            "sec_rank": m.sector.rank, "sec_total": m.sector.total,
+        }
+        for m in ranking.metrics
+    }
+
     return StockSnapshot(
+        market_cap_cr=market_cap,
+        cap_category=cap_category(market_cap, reference),
+        peer_sector=ranking.sector,
+        peer_subsector=ranking.subsector,
+        peer_summary=ranking.summary(),
+        peer_ranks=peer_ranks,
         symbol=stock.symbol,
         name=stock.name,
         industry=stock.industry,
@@ -271,6 +300,7 @@ class RunHistory:
         data_source: str = "",
         when: datetime | None = None,
         store=None,
+        reference=None,
     ) -> RunRecord:
         """`store` is the FundamentalsStore the run used, so each snapshot can keep the
         concall summary and industry rank alongside its scores."""
@@ -288,7 +318,7 @@ class RunHistory:
             active_params=active_params(toggles),
             data_source=data_source,
             stocks=sorted(
-                (snapshot_stock(s, toggles, company_for(s.symbol)) for s in stocks),
+                (snapshot_stock(s, toggles, company_for(s.symbol), reference) for s in stocks),
                 key=sort_key,
             ),
         )

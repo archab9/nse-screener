@@ -57,11 +57,11 @@ from nse_screener.concall import extract_takeaways
 from nse_screener.config import resolve_path
 from nse_screener.display import (
     BADGE_LEGEND,
+    format_snapshot_detail,
     headline_positive,
-    is_leader,
-    leader_short,
     parameter_badges,
 )
+from nse_screener.peer_ranking import cap_category, rank_symbol
 from nse_screener.gui.kite_dialog import KiteSettingsDialog
 from nse_screener.gui.login_dialog import ScreenerLoginDialog
 from nse_screener.gui.history_tab import HistoryTab
@@ -69,7 +69,7 @@ from nse_screener.gui.sector_leadership_tab import SectorLeadershipTab
 from nse_screener.gui.sectors_tab import SectorsTab
 from nse_screener.gui.thresholds_tab import ThresholdsTab
 from nse_screener.gui.watchlist_tab import WatchlistTab
-from nse_screener.run_history import RunHistory
+from nse_screener.run_history import RunHistory, snapshot_stock
 from nse_screener.sector_history import SectorHistory
 from nse_screener.market.kite import TokenState, build_login_url, check_token, complete_login
 from nse_screener.models import P8_ID, PARAM_IDS, PARAM_NAMES, RunContext, ScoredStock, Tier
@@ -100,13 +100,25 @@ UNRESOLVED_BG = QColor("#f5f5f5")
 UNRESOLVED_FG = QColor("#6a1b9a")
 
 COLUMNS = [
-    "Ticker", "Industry", "Params hit", "Parameters", "Score", "Tier",
-    "Sector leader", "Watchlist", "Biggest positive", "Concall +/-", "Key flags",
+    "Ticker", "Cap", "Industry", "Params hit", "Parameters", "Score", "Tier",
+    "Peer rank", "Watchlist", "Biggest positive", "Concall +/-", "Key flags",
 ]
-COL_INDUSTRY, COL_HIT, COL_BADGES, COL_TIER = 1, 2, 3, 5
-COL_LEADER, COL_WATCH, COL_POSITIVE, COL_DESC = 6, 7, 8, 9
+COL_CAP, COL_INDUSTRY, COL_HIT, COL_BADGES, COL_TIER = 1, 2, 3, 4, 6
+COL_LEADER, COL_WATCH, COL_POSITIVE, COL_DESC = 7, 8, 9, 10
 
 INPUT_CSV, INPUT_TXT, INPUT_MANUAL = "csv", "txt", "manual"
+
+
+def _is_top(ranking) -> bool:
+    """Top quartile of its subsector on the primary metric - a band wide enough to be
+    informative, unlike the old top-3 flag which was empty for nearly every stock."""
+    from nse_screener.peer_ranking import PRIMARY_METRIC
+
+    metric = ranking.metric(PRIMARY_METRIC)
+    if metric is None:
+        return False
+    pct = metric.subsector.percentile
+    return pct is not None and pct <= 25.0
 
 
 def _make_icon() -> QIcon:
@@ -196,8 +208,7 @@ class ScreenerWindow(QMainWindow):
         layout.addWidget(self.summary)
 
         self.legend = QLabel(
-            "Green row = top 3 by market cap in its own Screener.in industry.   "
-            + BADGE_LEGEND
+            "Green row = top-quartile peer rank in its subsector.   " + BADGE_LEGEND
         )
         self.legend.setWordWrap(True)
         self.legend.setStyleSheet("color:#1b5e20; font-size:11px; padding:2px;")
@@ -212,10 +223,11 @@ class ScreenerWindow(QMainWindow):
         # cell needs real width and wrapping, and rows must size to their content rather
         # than clipping to a single line.
         self.table.setWordWrap(True)
+        self.table.setColumnWidth(COL_CAP, 80)
         self.table.setColumnWidth(COL_INDUSTRY, 150)
         self.table.setColumnWidth(COL_BADGES, 190)
         self.table.setColumnWidth(COL_TIER, 140)
-        self.table.setColumnWidth(COL_LEADER, 200)
+        self.table.setColumnWidth(COL_LEADER, 215)
         self.table.setColumnWidth(COL_POSITIVE, 260)
         self.table.setColumnWidth(COL_DESC, 430)
         self.table.verticalHeader().setDefaultAlignment(
@@ -322,7 +334,7 @@ class ScreenerWindow(QMainWindow):
         # Sector leadership is an optional overlay, same standing as P8: off means the
         # Industry column, the Unresolved marking and the green highlight all disappear,
         # and no breadth evaluation is applied to the table at all.
-        self.sector_overlay = QCheckBox("Sector leadership overlay (optional, never scored)")
+        self.sector_overlay = QCheckBox("Peer ranking overlay (optional, never scored)")
         self.sector_overlay.setChecked(True)
         self.sector_overlay.setToolTip(
             "Off: no Industry column, no leadership highlighting, no unresolved marking.\n"
@@ -499,6 +511,7 @@ class ScreenerWindow(QMainWindow):
                 stage1_count=self._result.context.stage1_count,
                 data_source=source,
                 store=self._result.store,
+                reference=self.leadership_tab.reference(),
             )
             self._runs.save()
             self.history_tab.refresh()
@@ -678,24 +691,27 @@ class ScreenerWindow(QMainWindow):
             unresolved = overlay and not classification.resolved
             company = self._company_for(stock.symbol)
 
-            # Sector leadership is now the simple, checkable fact: is this stock top-3 by
-            # market cap in its own Screener.in industry, and which industry is that.
-            rank = getattr(company, "industry_rank", None)
-            total = getattr(company, "industry_peer_count", None)
+            # Peer ranking: where this stock sits among its subsector and sector on
+            # returns and growth. Replaces the old top-3 flag, which was blank for almost
+            # every stock and returned nothing at all for smaller names.
             industry = getattr(company, "industry", "") or classification.industry or stock.industry
-            leader = overlay and is_leader(rank)
+            ranking = rank_symbol(self.leadership_tab.reference(), stock.symbol)
+            market_cap = getattr(company, "market_cap_cr", None)
+            cap = cap_category(market_cap, self.leadership_tab.reference())
+            leader = overlay and ranking.available and _is_top(ranking)
 
             verdicts = {pid: r.verdict.label for pid, r in stock.results.items()}
             hits = sum(1 for pid in PARAM_IDS if toggles.get(pid, True) and verdicts.get(pid) == "YES")
 
             values = [
                 stock.symbol,
+                cap or "-",
                 ("Unresolved" if unresolved and not industry else industry) or "-",
                 f"{hits} of {sum(1 for p in PARAM_IDS if toggles.get(p, True))}",
                 parameter_badges(verdicts, toggles),
                 f"{stock.score_display}  ({stock.pct_of_max:.0f}%)",
                 stock.tier.value,
-                (leader_short(rank, total, industry) if overlay else "") or "-",
+                (ranking.summary() if overlay else "") or "-",
                 "",  # watchlist combo goes here
                 self._headline(stock) or "-",
                 self._describe(stock),
@@ -719,7 +735,7 @@ class ScreenerWindow(QMainWindow):
                     item.setBackground(LEADER_BG)
                     if col in (0, COL_LEADER):
                         item.setForeground(LEADER_FG)
-                        item.setToolTip(f"Top 3 by market cap: #{rank} of {total} in {industry}")
+                        item.setToolTip("\n".join(ranking.table()))
                 elif unresolved and not industry:
                     item.setBackground(UNRESOLVED_BG)
                     if col in (0, COL_INDUSTRY):
@@ -732,12 +748,16 @@ class ScreenerWindow(QMainWindow):
                     item.setToolTip(self._describe(stock, full=True))
                 if col == COL_POSITIVE:
                     item.setToolTip(value)
+                if col == COL_LEADER and ranking.available:
+                    item.setToolTip("\n".join(ranking.table()))
                 self.table.setItem(row, col, item)
 
             self.table.setCellWidget(row, COL_WATCH, self._watch_widget(stock))
 
         self.table.blockSignals(False)
         self._fit_rows()
+        if self._ranked:
+            self.table.selectRow(0)
         self._report_unresolved()
 
     def _fit_rows(self) -> None:
@@ -853,52 +873,38 @@ class ScreenerWindow(QMainWindow):
             lines.append(company.about[:400])
         return "\n".join(lines)
 
-    def _render_cards(self, toggles: dict[str, bool]) -> None:
-        finalists = [s for s in self._ranked if s.tier.rank >= Tier.QUALITY_GROWER.rank]
-        if not finalists:
-            self.cards.setPlainText(
-                "No stock reached QUALITY GROWER with the current parameter selection.\n"
-                "Detail cards are generated for QUALITY GROWER and above."
-            )
+    def _render_cards(self, toggles: dict[str, bool], row: int = 0) -> None:
+        """Detail for the selected stock, in the same format History and Watchlist use.
+
+        Every stock gets one, whatever its tier. Gating this at QUALITY GROWER meant
+        clicking a WATCHLIST or EXCLUDED row did nothing at all, which reads as the app
+        being broken rather than as a deliberate cut-off - and the reason a stock scored
+        badly is exactly what you want to read.
+        """
+        if not self._ranked:
+            self.cards.setPlainText("No stocks to show. Press Generate Results.")
             return
-        self.cards.setPlainText(
-            "\n\n".join(self._card_with_narrative(s, toggles) for s in finalists)
+        row = row if 0 <= row < len(self._ranked) else 0
+        self.cards.setPlainText(self._detail_for(self._ranked[row], toggles))
+
+    def _detail_for(self, stock: ScoredStock, toggles: dict[str, bool]) -> str:
+        """One renderer shared with History and Watchlist, so the three cannot diverge."""
+        snapshot = snapshot_stock(
+            stock, toggles, self._company_for(stock.symbol), self.leadership_tab.reference()
+        )
+        text = format_snapshot_detail(
+            snapshot, self._runs.appearances(stock.symbol), self._runs.retention_days()
         )
 
-    def _card_with_narrative(self, stock: ScoredStock, toggles: dict[str, bool]) -> str:
-        card = format_detail_card(stock, toggles)
-        company = self._result.store.get(stock.symbol) if self._result and self._result.store else None
-        if company is None:
-            return card
-
-        extra = ["", "Business and latest concall (from Screener.in):"]
-        if company.about:
-            extra.append(f"    About: {company.about}")
-        for point in company.key_points[:6]:
-            extra.append(f"    - {point}")
-        if company.concall_summary:
-            takeaways = extract_takeaways(company.concall_summary)
-            extra.append(f"    Concall takeaways ({company.concall_date}):")
-            for t in takeaways.positives:
-                extra.append(f"      + {t.pointer}")
-            for t in takeaways.negatives:
-                extra.append(f"      - {t.pointer}")
-            extra.append(
-                f"      [positive/negative split is keyword-based over {takeaways.source_points} "
-                f"Screener.in points - verify against the transcript]"
-            )
-            for date_label, kind, url in company.concall_links[:1]:
-                extra.append(f"      {date_label} {kind}: {url}")
-        elif company.concall_links:
-            extra.append("    No Screener.in concall summary available. Transcripts:")
-            for date_label, kind, url in company.concall_links[:3]:
-                extra.append(f"      {date_label} {kind}: {url}")
-        if company.industry_rank:
-            extra.append(
-                f"    Industry rank: #{company.industry_rank} of "
-                f"{company.industry_peer_count} by market cap in {company.industry}"
-            )
-        return card + "\n".join(extra)
+        company = self._company_for(stock.symbol)
+        if company is not None and company.concall_links:
+            extra = ["", "Concall transcripts:"]
+            extra += [
+                f"    {date_label} {kind}: {url}"
+                for date_label, kind, url in company.concall_links[:3]
+            ]
+            text += "\n" + "\n".join(extra)
+        return text
 
     def _on_cell_double_clicked(self, row: int, column: int) -> None:
         """Double-clicking the Industry cell opens the manual classification dialog."""
@@ -917,9 +923,7 @@ class ScreenerWindow(QMainWindow):
             return
         row = rows.pop()
         if 0 <= row < len(self._ranked):
-            stock = self._ranked[row]
-            if stock.tier.rank >= Tier.QUALITY_GROWER.rank:
-                self.cards.setPlainText(self._card_with_narrative(stock, self._toggles()))
+            self.cards.setPlainText(self._detail_for(self._ranked[row], self._toggles()))
 
 
 def main() -> int:

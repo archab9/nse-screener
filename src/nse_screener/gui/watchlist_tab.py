@@ -26,22 +26,25 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from nse_screener.display import (
-    BADGE_LEGEND,
-    format_snapshot_detail,
-    is_leader,
-    leader_short,
-    parameter_badges,
-)
+from nse_screener.display import BADGE_LEGEND, format_snapshot_detail, parameter_badges
 from nse_screener.run_history import RunHistory, StockSnapshot, sort_key
 from nse_screener.watchlist import Watchlist, WatchState
 
 COLUMNS = [
-    "Symbol", "Params hit", "Parameters", "Score", "Tier",
-    "Sector leader", "Biggest positive", "Note", "Added",
+    "Symbol", "Cap", "Params hit", "Parameters", "Score", "Tier",
+    "Peer rank", "Biggest positive", "Note", "Added",
 ]
-COL_NOTE = 7
+COL_NOTE = 8
 LEADER_BG = QColor("#c8e6c9")
+
+
+def _top_quartile(snap) -> bool:
+    """Highlight when the stock sits in the best quartile of its subsector on the primary
+    metric. The old rule was top-3 by market cap, which left almost every row unmarked."""
+    data = (snap.peer_ranks or {}).get("Price return 1y")
+    if not data or not data.get("sub_rank") or (data.get("sub_total") or 0) < 2:
+        return False
+    return (data["sub_rank"] - 1) / (data["sub_total"] - 1) * 100.0 <= 25.0
 
 
 class WatchlistTab(QWidget):
@@ -142,18 +145,14 @@ class WatchlistTab(QWidget):
 
         for row, (symbol, snap) in enumerate(self._rows):
             entry = self._watchlist.entries.get(symbol)
-            leader = leader_short(
-                snap.industry_rank if snap else None,
-                snap.industry_peer_count if snap else None,
-                snap.industry if snap else "",
-            )
             values = [
                 symbol,
+                (snap.cap_category if snap else "") or "-",
                 snap.hit_display if snap else "not screened",
                 parameter_badges(snap.verdicts, snap.active_toggles) if snap else "-",
                 snap.score_display if snap else "-",
                 snap.tier if snap else "-",
-                leader or "-",
+                (snap.peer_summary if snap else "") or "-",
                 (snap.headline_positive if snap else "") or "-",
                 entry.note if entry else "",
                 entry.updated if entry else "",
@@ -162,12 +161,12 @@ class WatchlistTab(QWidget):
                 item = QTableWidgetItem(value)
                 if col != COL_NOTE:
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                if col == 1 and snap:
+                if col == 2 and snap:
                     item.setForeground(QColor("#1b5e20"))
                     font = item.font()
                     font.setBold(True)
                     item.setFont(font)
-                if snap and is_leader(snap.industry_rank):
+                if snap and _top_quartile(snap):
                     item.setBackground(LEADER_BG)
                 self.table.setItem(row, col, item)
 
