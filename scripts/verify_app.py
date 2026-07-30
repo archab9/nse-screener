@@ -295,7 +295,7 @@ def _():
 
 @check("GUI - overlay toggle and banner stability")
 def _():
-    from nse_screener.gui.app import COL_INDUSTRY, LEADER_BG
+    from nse_screener.gui.app import COL_LEADER, LEADER_BG
 
     green = lambda: sum(
         1 for r in range(_win.table.rowCount())
@@ -303,12 +303,14 @@ def _():
     )
     on = green()
     _win.sector_overlay.setChecked(False)
-    off, hidden = green(), _win.table.isColumnHidden(COL_INDUSTRY)
+    off, hidden = green(), _win.table.isColumnHidden(COL_LEADER)
     _win.sector_overlay.setChecked(True)
     baseline = _win.banner_box.count()
     for i in range(10):
         _win._checkboxes["P5"].setChecked(i % 2 == 0)
-    assert off == 0 and hidden and green() == on and _win.banner_box.count() == baseline
+    stable = _win.banner_box.count() == baseline
+    _win._checkboxes["P5"].setChecked(True)  # leave every parameter on for later checks
+    assert off == 0 and hidden and green() == on and stable
     return f"green {on}->0->{green()}; banners stable at {baseline} over 10 toggles"
 
 
@@ -374,23 +376,96 @@ def _():
     return f"{len(text)} chars incl. per-parameter evidence and appearances"
 
 
-@check("GUI - watchlist, sectors, unresolved marking")
+@check("GUI - sector leader column names the industry")
 def _():
-    from nse_screener.gui.app import COL_INDUSTRY
+    from nse_screener.gui.app import COL_LEADER, LEADER_BG
+
+    leaders = {
+        _win.table.item(r, 0).text(): _win.table.item(r, COL_LEADER).text()
+        for r in range(_win.table.rowCount())
+        if _win.table.item(r, 0).background().color() == LEADER_BG
+    }
+    assert leaders, "fixture should contain at least one top-3 stock"
+    assert all("in " in v for v in leaders.values()), leaders
+    return "; ".join(f"{k}: {v}" for k, v in leaders.items())
+
+
+@check("GUI - pass/fail badges per parameter")
+def _():
+    from nse_screener.gui.app import COL_BADGES, COL_HIT
+
+    rows = [
+        (_win.table.item(r, 0).text(), _win.table.item(r, COL_HIT).text(),
+         _win.table.item(r, COL_BADGES).text())
+        for r in range(_win.table.rowCount())
+    ]
+    assert all("P1" in b and "P7" in b for _s, _h, b in rows)
+    return rows[0][0] + "  " + rows[0][1] + "  " + rows[0][2]
+
+
+@check("GUI - watchlist sorted like history, with detail")
+def _():
     from nse_screener.watchlist import WatchState
 
-    combo = _win.table.cellWidget(0, 8)
+    for symbol in ("VSSL", "NEWGEN", "AJAXENGG", "BLKASHYAP"):
+        _win._watchlist.set_state(symbol, WatchState.WATCHING)
+    _win._watchlist.save()
+    _win.watchlist_tab.refresh()
+
+    table = _win.watchlist_tab.table
+    hits = [int(table.item(r, 1).text().split()[0]) for r in range(table.rowCount())]
+    assert hits == sorted(hits, reverse=True), hits
+
+    table.selectRow(0)
+    text = _win.watchlist_tab.detail.toPlainText()
+    assert table.item(0, 0).text() in text and "Passed (" in text and "Failed (" in text
+    order = " > ".join(f"{table.item(r, 0).text()}({h})" for r, h in enumerate(hits))
+    return order
+
+
+@check("GUI - run filter on entire watchlist")
+def _():
+    symbols = set(_win.watchlist_tab.symbols())
+    _win.watchlist_tab._run_watchlist()
+    shown = {_win.table.item(r, 0).text() for r in range(_win.table.rowCount())}
+    assert shown == symbols, (shown, symbols)
+    return f"screened {len(shown)} watchlist stock(s) through the normal pipeline"
+
+
+@check("GUI - detail pane refreshes with the table")
+def _():
+    """Regression: selectRow(0) emits nothing when row 0 is already selected, so the
+    detail pane kept the previous stock's numbers beside a refreshed table."""
+    tab = _win.history_tab
+    tab.refresh()
+    tab.table.selectRow(0)
+    first = tab.table.item(0, 0).text()
+    assert first in tab.detail.toPlainText()
+    tab.refresh()
+    assert tab.table.item(0, 0).text() in tab.detail.toPlainText()
+    return "detail matches row 0 after re-render"
+
+
+@check("GUI - watchlist control and industry column")
+def _():
+    from nse_screener.gui.app import COL_INDUSTRY, COL_WATCH
+    from nse_screener.watchlist import WatchState
+
+    combo = _win.table.cellWidget(0, COL_WATCH)
     symbol = _win.table.item(0, 0).text()
     combo.setCurrentIndex(combo.findData(WatchState.WATCHING))
     watched = _win._watchlist.state_of(symbol) is WatchState.WATCHING
     combo.setCurrentIndex(combo.findData(WatchState.NONE))
     _win.sectors_tab.refresh(_win._ranked)
-    rows = {
+
+    industries = {
         _win.table.item(r, 0).text(): _win.table.item(r, COL_INDUSTRY).text()
         for r in range(_win.table.rowCount())
     }
-    assert watched and rows["PICCADIL"] == "Unresolved" and _win.unresolved_label.isVisible()
-    return f"watchlist writes through; {_win.leadership_tab.table.rowCount()} industries; PICCADIL unresolved"
+    assert watched, "watchlist combo must write through"
+    assert all(v.strip() and v != "-" for v in industries.values()), industries
+    return f"watchlist writes through; every row names its industry; "\
+           f"{_win.leadership_tab.table.rowCount()} industries on the breadth tab"
 
 
 # ---------------------------------------------------------------------- report

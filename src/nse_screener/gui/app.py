@@ -55,6 +55,13 @@ if __package__ in (None, ""):
 from nse_screener.classification import ClassificationStore, Source, rank_within_industry
 from nse_screener.concall import extract_takeaways
 from nse_screener.config import resolve_path
+from nse_screener.display import (
+    BADGE_LEGEND,
+    headline_positive,
+    is_leader,
+    leader_short,
+    parameter_badges,
+)
 from nse_screener.gui.kite_dialog import KiteSettingsDialog
 from nse_screener.gui.login_dialog import ScreenerLoginDialog
 from nse_screener.gui.history_tab import HistoryTab
@@ -93,10 +100,11 @@ UNRESOLVED_BG = QColor("#f5f5f5")
 UNRESOLVED_FG = QColor("#6a1b9a")
 
 COLUMNS = [
-    "Ticker", "Sector", "Industry", "Score", "Tier", "Tailwind",
-    "PEGY", "PB", "Watchlist", "Description", "Key flags",
+    "Ticker", "Industry", "Params hit", "Parameters", "Score", "Tier",
+    "Sector leader", "Watchlist", "Biggest positive", "Concall +/-", "Key flags",
 ]
-COL_INDUSTRY, COL_TIER, COL_TAILWIND, COL_WATCH, COL_DESC = 2, 4, 5, 8, 9
+COL_INDUSTRY, COL_HIT, COL_BADGES, COL_TIER = 1, 2, 3, 5
+COL_LEADER, COL_WATCH, COL_POSITIVE, COL_DESC = 6, 7, 8, 9
 
 INPUT_CSV, INPUT_TXT, INPUT_MANUAL = "csv", "txt", "manual"
 
@@ -143,8 +151,9 @@ class ScreenerWindow(QMainWindow):
         self.thresholds_tab.changed.connect(self._on_thresholds_changed)
         self.tabs.addTab(self.thresholds_tab, "Thresholds")
 
-        self.watchlist_tab = WatchlistTab(self._watchlist)
+        self.watchlist_tab = WatchlistTab(self._watchlist, self._runs)
         self.watchlist_tab.changed.connect(self._render_table_only)
+        self.watchlist_tab.run_requested.connect(self._run_on_symbols)
         self.tabs.addTab(self.watchlist_tab, "Watchlist")
 
         self.sectors_tab = SectorsTab()
@@ -187,9 +196,8 @@ class ScreenerWindow(QMainWindow):
         layout.addWidget(self.summary)
 
         self.legend = QLabel(
-            "Green row = the stock's Industry is leadership-aligned (early signal) AND the "
-            "stock is top-3 by core score among stocks scored here in that Industry.   "
-            "Purple ticker = Sector unresolved, so it could not be evaluated at all."
+            "Green row = top 3 by market cap in its own Screener.in industry.   "
+            + BADGE_LEGEND
         )
         self.legend.setWordWrap(True)
         self.legend.setStyleSheet("color:#1b5e20; font-size:11px; padding:2px;")
@@ -204,9 +212,12 @@ class ScreenerWindow(QMainWindow):
         # cell needs real width and wrapping, and rows must size to their content rather
         # than clipping to a single line.
         self.table.setWordWrap(True)
-        self.table.setColumnWidth(1, 150)
-        self.table.setColumnWidth(COL_TIER, 145)
-        self.table.setColumnWidth(COL_DESC, 470)
+        self.table.setColumnWidth(COL_INDUSTRY, 150)
+        self.table.setColumnWidth(COL_BADGES, 190)
+        self.table.setColumnWidth(COL_TIER, 140)
+        self.table.setColumnWidth(COL_LEADER, 200)
+        self.table.setColumnWidth(COL_POSITIVE, 260)
+        self.table.setColumnWidth(COL_DESC, 430)
         self.table.verticalHeader().setDefaultAlignment(
             Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight
         )
@@ -424,7 +435,7 @@ class ScreenerWindow(QMainWindow):
 
     # ------------------------------------------------------------------ actions
 
-    def generate(self) -> None:
+    def generate(self, exclude_removed: bool = True) -> None:
         """The single trigger. Runs the whole pipeline synchronously."""
         hits, error = self._collect_hits()
         if error:
@@ -463,7 +474,7 @@ class ScreenerWindow(QMainWindow):
                 hits=hits,
                 data_source=source,
                 progress=progress,
-                exclude_symbols=self._watchlist.removed_symbols(),
+                exclude_symbols=self._watchlist.removed_symbols() if exclude_removed else None,
             )
         except Exception as exc:
             self._add_banner("error", f"Pipeline failed: {exc}")
@@ -487,11 +498,30 @@ class ScreenerWindow(QMainWindow):
                 self._toggles(),
                 stage1_count=self._result.context.stage1_count,
                 data_source=source,
+                store=self._result.store,
             )
             self._runs.save()
             self.history_tab.refresh()
         except OSError as exc:
             self._add_banner("warning", f"Run computed but not saved to history: {exc}")
+
+    def _run_on_symbols(self, symbols: list[str]) -> None:
+        """Screen an explicit symbol list - used by 'Run filter on entire watchlist'.
+
+        Switches the Screener tab to typed-symbol input and runs it, so the result lands
+        in the same table, the same detail cards and the same run history as any other
+        run. Watchlist stocks are not filtered out even if marked removed elsewhere -
+        being on the watchlist is the more recent, more deliberate signal.
+        """
+        if not symbols:
+            return
+        self.input_combo.setCurrentIndex(
+            next(i for i in range(self.input_combo.count())
+                 if self.input_combo.itemData(i) == INPUT_MANUAL)
+        )
+        self.manual_box.setPlainText(" ".join(symbols))
+        self.tabs.setCurrentIndex(0)
+        self.generate(exclude_removed=False)
 
     def _collect_hits(self) -> tuple[list | None, str]:
         """Resolve the stage-1 list. Returns (hits, error). hits=None means 'read the CSV'."""
@@ -632,12 +662,12 @@ class ScreenerWindow(QMainWindow):
         show_p8 = self._show_p8()
         self.table.blockSignals(True)
         self.table.setRowCount(len(self._ranked))
-        self.table.setColumnHidden(COL_TAILWIND, not show_p8)
 
+        # The overlay checkbox now governs the sector-leader column only. Leadership is a
+        # single checkable fact - top 3 by market cap in the stock's own industry - so the
+        # breadth machinery is no longer in the row-highlight path.
         overlay = self._sector_overlay_on()
-        self.table.setColumnHidden(COL_INDUSTRY, not overlay)
-        aligned = self.leadership_tab.leadership_industries() if overlay else set()
-        ranks = rank_within_industry(self._ranked, self._classification) if overlay else {}
+        self.table.setColumnHidden(COL_LEADER, not overlay)
 
         for row, stock in enumerate(self._ranked):
             flags = "; ".join(
@@ -646,26 +676,28 @@ class ScreenerWindow(QMainWindow):
             )
             classification = self._classification.get(stock.symbol)
             unresolved = overlay and not classification.resolved
-            industry = classification.industry
+            company = self._company_for(stock.symbol)
 
-            # Green requires BOTH: a leadership-aligned Industry, and a top-3 core score
-            # among the stocks scored here in that same Industry. Unresolved stocks are
-            # excluded by definition - they cannot be evaluated.
-            rank, total = ranks.get(stock.symbol, (None, None))
-            leader = (
-                not unresolved and industry in aligned and rank is not None and rank <= 3
-            )
+            # Sector leadership is now the simple, checkable fact: is this stock top-3 by
+            # market cap in its own Screener.in industry, and which industry is that.
+            rank = getattr(company, "industry_rank", None)
+            total = getattr(company, "industry_peer_count", None)
+            industry = getattr(company, "industry", "") or classification.industry or stock.industry
+            leader = overlay and is_leader(rank)
+
+            verdicts = {pid: r.verdict.label for pid, r in stock.results.items()}
+            hits = sum(1 for pid in PARAM_IDS if toggles.get(pid, True) and verdicts.get(pid) == "YES")
 
             values = [
                 stock.symbol,
-                classification.sector or stock.industry or "-",
-                "Unresolved" if unresolved else industry,
+                ("Unresolved" if unresolved and not industry else industry) or "-",
+                f"{hits} of {sum(1 for p in PARAM_IDS if toggles.get(p, True))}",
+                parameter_badges(verdicts, toggles),
                 f"{stock.score_display}  ({stock.pct_of_max:.0f}%)",
                 stock.tier.value,
-                ("Yes" if stock.sector_tailwind else "No") if show_p8 else "",
-                f"{stock.pegy:.2f}" if stock.pegy is not None else "-",
-                f"{stock.pb:.2f}" if stock.pb is not None else "-",
+                (leader_short(rank, total, industry) if overlay else "") or "-",
                 "",  # watchlist combo goes here
+                self._headline(stock) or "-",
                 self._describe(stock),
                 flags,
             ]
@@ -678,24 +710,28 @@ class ScreenerWindow(QMainWindow):
                     font = item.font()
                     font.setBold(True)
                     item.setFont(font)
+                if col == COL_HIT:
+                    item.setForeground(QColor("#1b5e20"))
+                    font = item.font()
+                    font.setBold(True)
+                    item.setFont(font)
                 if leader:
                     item.setBackground(LEADER_BG)
-                    if col == 0:
+                    if col in (0, COL_LEADER):
                         item.setForeground(LEADER_FG)
-                        item.setToolTip(self._leader_tooltip(industry, rank, total))
-                elif unresolved:
-                    # Visually distinct from "evaluated and did not qualify" - a silent
-                    # miss here is worse than an error.
+                        item.setToolTip(f"Top 3 by market cap: #{rank} of {total} in {industry}")
+                elif unresolved and not industry:
                     item.setBackground(UNRESOLVED_BG)
                     if col in (0, COL_INDUSTRY):
                         item.setForeground(UNRESOLVED_FG)
                         item.setToolTip(
-                            "Sector unresolved - not found in the sector reference export, "
-                            "so this stock is excluded from leadership highlighting. "
-                            "Set it by hand on the Sector Leadership tab, or refresh the export."
+                            "Industry unknown - not found in the sector reference export and "
+                            "not supplied by Screener.in, so no leadership check is possible."
                         )
                 if col == COL_DESC:
                     item.setToolTip(self._describe(stock, full=True))
+                if col == COL_POSITIVE:
+                    item.setToolTip(value)
                 self.table.setItem(row, col, item)
 
             self.table.setCellWidget(row, COL_WATCH, self._watch_widget(stock))
@@ -768,6 +804,21 @@ class ScreenerWindow(QMainWindow):
         )
         self._watchlist.save()
         self.watchlist_tab.refresh()
+
+    def _company_for(self, symbol: str):
+        if self._result is None or self._result.store is None:
+            return None
+        return self._result.store.get(symbol)
+
+    def _headline(self, stock: ScoredStock) -> str:
+        """The single biggest positive: strongest concall takeaway, else Key Points."""
+        company = self._company_for(stock.symbol)
+        if company is None:
+            return ""
+        positives = []
+        if company.concall_summary:
+            positives = [t.pointer for t in extract_takeaways(company.concall_summary).positives]
+        return headline_positive(positives, list(company.key_points or []), company.about or "")
 
     def _describe(self, stock: ScoredStock, full: bool = False) -> str:
         """Concall takeaways and business USP, quoted from Screener.in.

@@ -45,9 +45,22 @@ tier either way.
 the current results immediately without re-fetching, since only the rules changed, not
 the data. Fields differing from the shipped default are highlighted, and there's a reset.
 
-**Watchlist** — everything you added, with the tier and score captured at the time plus a
-free-text note. "Removed" is a distinct state from "never seen", so a stock you dismissed
-stays dismissed on later runs instead of resurfacing as new.
+**Watchlist** — sorted the same way History is, most parameters hit first, using each
+stock's latest recorded run. Click any stock for the same full detail History shows.
+**Run filter on entire watchlist** screens every watchlist stock through the normal
+pipeline in one press. "Removed" is a distinct state from "never seen", so a stock you
+dismissed stays dismissed instead of resurfacing as new.
+
+## Sector leadership
+
+Two separate things, deliberately:
+
+- **Per-stock, on every tab** — is this stock **top 3 by market cap in its own industry**,
+  and which industry. Taken from Screener.in's own industry table, so it's a checkable
+  fact. Shown as a column, as a green row, and in the detail view. Toggle it off with
+  **Sector leadership overlay**.
+- **Sector Leadership tab** — the broader breadth study, which is a different question
+  (how widely fundamentals are improving across an industry) and stays on its own tab.
 
 **History** — every run is recorded automatically and kept for 30 days. Stocks are listed
 **most parameters hit first**, where a "hit" is a YES verdict on an active parameter.

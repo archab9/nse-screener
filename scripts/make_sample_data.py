@@ -36,6 +36,7 @@ def seasonal(series: list[float]) -> list[float]:
 PROFILES = {
     # Strong across the board - should land ELITE COMPOUNDER.
     "NEWGEN": {
+        "industry_rank": 1, "industry_peer_count": 18,
         "name": "Newgen Software Technologies Ltd",
         "industry": "Software - Application",
         "market_cap_cr": 14500,
@@ -54,6 +55,7 @@ PROFILES = {
     },
     # Quality but expensive, and ROE is leverage-driven - PARTIAL on P2 and P7.
     "KALYANKJIL": {
+        "industry_rank": 2, "industry_peer_count": 24,
         "name": "Kalyan Jewellers India Ltd",
         "industry": "Retail - Jewellery",
         "market_cap_cr": 52000,
@@ -72,6 +74,7 @@ PROFILES = {
     },
     # Cyclical peak: both TTM metrics at highs but CAGR below 12%.
     "VSSL": {
+        "industry_rank": 11, "industry_peer_count": 40,
         "name": "Vardhman Special Steels Limited",
         "industry": "Steel & Iron Products",
         "market_cap_cr": 3400,
@@ -108,6 +111,7 @@ PROFILES = {
     },
     # Defense tailwind, rich valuation - P8 Yes, P7 poor. Spec predicts exactly this.
     "AJAXENGG": {
+        "industry_rank": 3, "industry_peer_count": 31,
         "name": "Ajax Engineering Ltd",
         "industry": "Industrial Machinery & Capital Goods",
         "market_cap_cr": 8200,
@@ -227,10 +231,12 @@ def main() -> None:
     write(
         OUT / "company.csv",
         ["symbol", "name", "industry", "market_cap_cr", "pe", "pb",
-         "eps_cagr_pct", "dividend_yield_pct", "is_psu"],
+         "eps_cagr_pct", "dividend_yield_pct", "is_psu",
+         "industry_rank", "industry_peer_count"],
         [
             [sym, p["name"], p["industry"], p["market_cap_cr"], p["pe"], p["pb"],
-             p["eps_cagr_pct"], p["dividend_yield_pct"], "false"]
+             p["eps_cagr_pct"], p["dividend_yield_pct"], "false",
+             p.get("industry_rank", ""), p.get("industry_peer_count", "")]
             for sym, p in PROFILES.items()
         ],
     )

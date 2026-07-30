@@ -17,7 +17,7 @@ pytest.importorskip("PyQt6")
 
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
-from nse_screener.gui.app import COL_INDUSTRY, LEADER_BG, ScreenerWindow  # noqa: E402
+from nse_screener.gui.app import COL_INDUSTRY, COL_LEADER, LEADER_BG, ScreenerWindow  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -62,23 +62,42 @@ def green_rows(window) -> int:
 
 
 class TestSectorOverlayToggle:
+    """Sector leadership is now one checkable fact - top 3 by market cap in the stock's
+    own Screener.in industry - so the overlay governs the Sector leader column."""
+
     def test_on_by_default(self, window):
         assert window.sector_overlay.isChecked() is True
-        assert window.table.isColumnHidden(COL_INDUSTRY) is False
+        assert window.table.isColumnHidden(COL_LEADER) is False
 
     def test_off_removes_column_and_highlight(self, window):
         assert green_rows(window) > 0, "fixture should produce at least one leader"
         window.sector_overlay.setChecked(False)
-        assert window.table.isColumnHidden(COL_INDUSTRY) is True
+        assert window.table.isColumnHidden(COL_LEADER) is True
         assert green_rows(window) == 0
-        assert window.unresolved_label.isVisible() is False
 
     def test_toggling_back_on_restores_it(self, window):
         before = green_rows(window)
         window.sector_overlay.setChecked(False)
         window.sector_overlay.setChecked(True)
         assert green_rows(window) == before
-        assert window.table.isColumnHidden(COL_INDUSTRY) is False
+        assert window.table.isColumnHidden(COL_LEADER) is False
+
+    def test_only_top_three_are_highlighted(self, window):
+        """NEWGEN is #1 and AJAXENGG #3 in the fixture; VSSL is #11 and must not shade."""
+        leaders = {
+            window.table.item(r, 0).text()
+            for r in range(window.table.rowCount())
+            if window.table.item(r, 0).background().color() == LEADER_BG
+        }
+        assert "NEWGEN" in leaders
+        assert "VSSL" not in leaders
+
+    def test_leader_column_names_the_industry(self, window):
+        for r in range(window.table.rowCount()):
+            if window.table.item(r, 0).text() == "NEWGEN":
+                assert "Software - Application" in window.table.item(r, COL_LEADER).text()
+                return
+        pytest.fail("NEWGEN not in table")
 
     def test_overlay_never_changes_scores_or_tiers(self, window):
         before = [(s.symbol, s.core_score, s.tier) for s in window._ranked]
@@ -132,19 +151,19 @@ class TestRunHistoryTab:
         assert len(window._runs.runs) == 2
 
 
-class TestUnresolvedIsVisiblyDistinct:
-    def test_unresolved_stock_is_labelled_not_silently_skipped(self, window):
-        industries = {
-            window.table.item(r, 0).text(): window.table.item(r, COL_INDUSTRY).text()
-            for r in range(window.table.rowCount())
-        }
-        assert industries["PICCADIL"] == "Unresolved"
-        assert window.unresolved_label.isVisible() is True
-        assert "PICCADIL" in window.unresolved_label.text()
+class TestIndustryColumn:
+    """The industry shown is the stock's OWN industry from the fundamentals source, since
+    that is what the top-3 rank is computed against. It no longer depends on matching the
+    bulk sector-reference export, so 'Unresolved' now means no industry from any source."""
 
-    def test_resolved_stocks_show_their_industry(self, window):
+    def test_each_stock_shows_its_own_industry(self, window):
         industries = {
             window.table.item(r, 0).text(): window.table.item(r, COL_INDUSTRY).text()
             for r in range(window.table.rowCount())
         }
-        assert industries["NEWGEN"] == "Aerospace & Defense"
+        assert industries["NEWGEN"] == "Software - Application"
+        assert industries["PICCADIL"] == "Breweries & Distilleries"
+
+    def test_industry_is_never_blank_when_known(self, window):
+        for r in range(window.table.rowCount()):
+            assert window.table.item(r, COL_INDUSTRY).text().strip()

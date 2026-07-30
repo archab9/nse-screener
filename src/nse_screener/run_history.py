@@ -68,6 +68,16 @@ class StockSnapshot:
     flags: list[str] = field(default_factory=list)
     params: dict[str, ParamSnapshot] = field(default_factory=dict)
 
+    # Carried so History and Watchlist can show the same detail as the Screener tab
+    # without re-fetching anything from Screener.in.
+    industry_rank: int | None = None
+    industry_peer_count: int | None = None
+    concall_date: str = ""
+    concall_positives: list[str] = field(default_factory=list)
+    concall_negatives: list[str] = field(default_factory=list)
+    headline_positive: str = ""
+    about: str = ""
+
     @property
     def hit_display(self) -> str:
         return f"{self.yes_count} of {self.yes_count + self.partial_count + self.no_count + self.unknown_count}"
@@ -75,6 +85,15 @@ class StockSnapshot:
     @property
     def score_display(self) -> str:
         return f"{self.core_score}/{self.active_max}"
+
+    @property
+    def verdicts(self) -> dict[str, str]:
+        return {pid: p.verdict for pid, p in self.params.items()}
+
+    @property
+    def active_toggles(self) -> dict[str, bool]:
+        """Which parameters were switched on for this run, inferred from what was scored."""
+        return {pid: pid in self.params for pid in PARAM_IDS}
 
 
 @dataclass
@@ -103,7 +122,17 @@ class RunRecord:
         return f"{stamp:%d %b %Y  %H:%M}  -  {self.scored_count} scored"
 
 
-def snapshot_stock(stock: ScoredStock, toggles: dict[str, bool] | None = None) -> StockSnapshot:
+def snapshot_stock(
+    stock: ScoredStock, toggles: dict[str, bool] | None = None, company=None
+) -> StockSnapshot:
+    """Freeze a scored stock, plus the narrative bits needed to display it later.
+
+    `company` is the CompanyFundamentals the score came from. It carries the concall
+    summary and industry rank, which History and Watchlist would otherwise have to
+    re-fetch from Screener.in every time a row is clicked.
+    """
+    from .concall import extract_takeaways
+    from .display import headline_positive
     from .scoring import normalise_toggles
 
     active = normalise_toggles(toggles)
@@ -123,10 +152,27 @@ def snapshot_stock(stock: ScoredStock, toggles: dict[str, bool] | None = None) -
         if pid in PARAM_IDS and active.get(pid, True):
             counts[result.verdict.label] = counts.get(result.verdict.label, 0) + 1
 
+    positives: list[str] = []
+    negatives: list[str] = []
+    if company is not None and getattr(company, "concall_summary", ""):
+        takeaways = extract_takeaways(company.concall_summary)
+        positives = [t.pointer for t in takeaways.positives]
+        negatives = [t.pointer for t in takeaways.negatives]
+
+    key_points = list(getattr(company, "key_points", []) or [])
+    about = getattr(company, "about", "") or ""
+
     return StockSnapshot(
         symbol=stock.symbol,
         name=stock.name,
         industry=stock.industry,
+        industry_rank=getattr(company, "industry_rank", None),
+        industry_peer_count=getattr(company, "industry_peer_count", None),
+        concall_date=getattr(company, "concall_date", "") or "",
+        concall_positives=positives,
+        concall_negatives=negatives,
+        headline_positive=headline_positive(positives, key_points, about),
+        about=about[:400],
         core_score=stock.core_score,
         active_max=stock.active_max,
         pct_of_max=round(stock.pct_of_max, 1),
@@ -224,8 +270,14 @@ class RunHistory:
         stage1_count: int = 0,
         data_source: str = "",
         when: datetime | None = None,
+        store=None,
     ) -> RunRecord:
+        """`store` is the FundamentalsStore the run used, so each snapshot can keep the
+        concall summary and industry rank alongside its scores."""
         from .scoring import active_params
+
+        def company_for(symbol: str):
+            return store.get(symbol) if store is not None else None
 
         stamp = when or datetime.now()
         run = RunRecord(
@@ -235,7 +287,10 @@ class RunHistory:
             scored_count=len(stocks),
             active_params=active_params(toggles),
             data_source=data_source,
-            stocks=sorted((snapshot_stock(s, toggles) for s in stocks), key=sort_key),
+            stocks=sorted(
+                (snapshot_stock(s, toggles, company_for(s.symbol)) for s in stocks),
+                key=sort_key,
+            ),
         )
         self.runs.append(run)
         # Prune against the real calendar, NOT against the timestamp being inserted.

@@ -265,6 +265,14 @@ def load_fundamentals(directory: Path | str | None = None) -> FundamentalsStore:
             eps_cagr_pct=_num(row.get("eps_cagr_pct")),
             dividend_yield_pct=_num(row.get("dividend_yield_pct")),
             is_psu=_flag(row.get("is_psu")),
+            # Optional. Live mode reads these from Screener.in's industry table; a saved
+            # export can carry them so the sector-leader column works offline too.
+            industry_rank=int(_num(row.get("industry_rank")))
+            if _num(row.get("industry_rank"))
+            else None,
+            industry_peer_count=int(_num(row.get("industry_peer_count")))
+            if _num(row.get("industry_peer_count"))
+            else None,
         )
 
     for row in _read_rows(base / "quarterly.csv"):

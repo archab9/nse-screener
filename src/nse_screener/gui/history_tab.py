@@ -27,18 +27,22 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from nse_screener.models import P8_ID, PARAM_IDS, PARAM_NAMES
+from nse_screener.display import (
+    BADGE_LEGEND,
+    format_snapshot_detail,
+    is_leader,
+    leader_short,
+    parameter_badges,
+)
 from nse_screener.run_history import RunHistory, StockSnapshot, sort_key
 
-COLUMNS = ["Ticker", "Params hit", "Score", "Tier", "Industry", "PEGY", "Runs", "Last seen"]
+COLUMNS = [
+    "Ticker", "Params hit", "Parameters", "Score", "Tier",
+    "Sector leader", "Biggest positive", "Runs", "Last seen",
+]
 
-VERDICT_COLOUR = {
-    "YES": "#1b5e20",
-    "PARTIAL": "#e65100",
-    "NO": "#b71c1c",
-    "N/A": "#757575",
-}
 ALL_RUNS = "__all__"
+LEADER_BG = QColor("#c8e6c9")
 
 
 class HistoryTab(QWidget):
@@ -67,7 +71,7 @@ class HistoryTab(QWidget):
 
         note = QLabel(
             "Sorted by parameters hit (YES verdicts on active parameters), most first. "
-            "Click a stock for its full breakdown."
+            "Click a stock for its full breakdown.   " + BADGE_LEGEND
         )
         note.setStyleSheet("color:#1b5e20; font-size:11px; padding:2px;")
         outer.addWidget(note)
@@ -122,20 +126,19 @@ class HistoryTab(QWidget):
         self.table.setRowCount(len(self._rows))
 
         for row, snap in enumerate(self._rows):
-            appearances = len(self._history.appearances(snap.symbol))
-            last_seen = ""
             history = self._history.appearances(snap.symbol)
-            if history:
-                last_seen = history[0][0].run_date.strftime("%d %b")
+            last_seen = history[0][0].run_date.strftime("%d %b") if history else ""
+            leader = leader_short(snap.industry_rank, snap.industry_peer_count, snap.industry)
 
             values = [
                 snap.symbol,
                 snap.hit_display,
+                parameter_badges(snap.verdicts, snap.active_toggles),
                 snap.score_display,
                 snap.tier,
-                snap.industry or "-",
-                f"{snap.pegy:.2f}" if snap.pegy is not None else "-",
-                str(appearances),
+                leader or "-",
+                snap.headline_positive or "-",
+                str(len(history)),
                 last_seen,
             ]
             for col, value in enumerate(values):
@@ -146,6 +149,8 @@ class HistoryTab(QWidget):
                     font = item.font()
                     font.setBold(True)
                     item.setFont(font)
+                if is_leader(snap.industry_rank):
+                    item.setBackground(LEADER_BG)
                 self.table.setItem(row, col, item)
 
         runs = len(self._history.runs)
@@ -164,60 +169,25 @@ class HistoryTab(QWidget):
 
         if self._rows:
             self.table.selectRow(0)
+            # Refresh the pane explicitly. selectRow emits nothing when row 0 is already
+            # selected, which left the previous stock's detail on screen beside a
+            # freshly rendered table - stale numbers next to a buy decision.
+            self._show_detail(force_row=0)
         else:
             self.detail.setPlainText("Nothing recorded for this selection.")
 
-    def _show_detail(self) -> None:
-        rows = {i.row() for i in self.table.selectedIndexes()}
-        if len(rows) != 1:
-            return
-        row = rows.pop()
+    def _show_detail(self, force_row: int | None = None) -> None:
+        if force_row is not None:
+            row = force_row
+        else:
+            rows = {i.row() for i in self.table.selectedIndexes()}
+            if len(rows) != 1:
+                return
+            row = rows.pop()
         if 0 <= row < len(self._rows):
             self.detail.setPlainText(self._format_detail(self._rows[row]))
 
     def _format_detail(self, snap: StockSnapshot) -> str:
-        lines = [
-            "=" * 84,
-            f"{snap.symbol} - {snap.name}",
-            f"{snap.industry or 'industry unknown'}",
-            f"{snap.tier}  |  {snap.score_display} ({snap.pct_of_max:.0f}% of active max)"
-            f"  |  parameters hit: {snap.yes_count}"
-            f"  (partial {snap.partial_count}, no {snap.no_count}, n/a {snap.unknown_count})",
-            f"Sector tailwind: {'Yes' if snap.sector_tailwind else 'No'}"
-            + (f" ({snap.tailwind_sector})" if snap.tailwind_sector else "")
-            + (f"   |   PEGY {snap.pegy:.2f}" if snap.pegy is not None else "")
-            + (f"   |   PB {snap.pb:.2f}" if snap.pb is not None else ""),
-            "=" * 84,
-        ]
-
-        for pid in list(PARAM_IDS) + [P8_ID]:
-            param = snap.params.get(pid)
-            if param is None:
-                continue
-            suffix = "  (reported separately, never scored)" if pid == P8_ID else ""
-            lines.append(f"\n{pid} {PARAM_NAMES.get(pid, pid)}: {param.verdict}{suffix}")
-            if param.detail:
-                lines.append(f"    {param.detail}")
-            for key, value in param.evidence.items():
-                lines.append(f"      - {key}: {_evidence(value)}")
-
-        lines.append("\nFlags raised:")
-        lines.extend(f"    {flag}" for flag in snap.flags) if snap.flags else lines.append("    none")
-
-        appearances = self._history.appearances(snap.symbol)
-        lines.append(f"\nAppeared in {len(appearances)} run(s) in the last "
-                     f"{self._history.retention_days()} days:")
-        for run, seen in appearances[:15]:
-            lines.append(
-                f"    {run.run_date:%d %b %Y}  {seen.score_display:>7}  "
-                f"{seen.yes_count} hit  {seen.tier}"
-            )
-        return "\n".join(lines)
-
-
-def _evidence(value) -> str:
-    if isinstance(value, dict):
-        return ", ".join(f"{k} {v}" for k, v in value.items())
-    if isinstance(value, list):
-        return ", ".join(str(v) for v in value)
-    return "n/a" if value is None else str(value)
+        return format_snapshot_detail(
+            snap, self._history.appearances(snap.symbol), self._history.retention_days()
+        )
