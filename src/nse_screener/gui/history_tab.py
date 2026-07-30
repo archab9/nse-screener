@@ -28,11 +28,12 @@ from PyQt6.QtWidgets import (
 )
 
 from nse_screener.display import BADGE_LEGEND, format_snapshot_detail, parameter_badges
+from nse_screener.leaderboard import TROPHY, Leaderboards, build_leaderboards, has_trophy
 from nse_screener.run_history import RunHistory, StockSnapshot, sort_key
 
 COLUMNS = [
     "Ticker", "Cap", "Params hit", "Parameters", "Score", "Tier",
-    "Peer rank", "Biggest positive", "Runs", "Last seen",
+    "Subsector (6m rank)", "Peer rank", "Biggest positive", "Runs", "Last seen",
 ]
 
 ALL_RUNS = "__all__"
@@ -52,6 +53,7 @@ class HistoryTab(QWidget):
     def __init__(self, history: RunHistory, parent=None) -> None:
         super().__init__(parent)
         self._history = history
+        self._board = Leaderboards()
         self._rows: list[StockSnapshot] = []
 
         outer = QVBoxLayout(self)
@@ -65,6 +67,14 @@ class HistoryTab(QWidget):
         refresh = QPushButton("Refresh")
         refresh.clicked.connect(self.refresh)
         header.addWidget(refresh)
+
+        self.sector_button = QPushButton("Run sector / subsector tests")
+        self.sector_button.setToolTip(
+            "Rank every sector and subsector by median 6-month share price return, "
+            "award gold/silver/bronze, and re-check which stocks earn a trophy."
+        )
+        self.sector_button.clicked.connect(self.run_sector_tests)
+        header.addWidget(self.sector_button)
         outer.addLayout(header)
 
         self.summary = QLabel()
@@ -78,6 +88,14 @@ class HistoryTab(QWidget):
         )
         note.setStyleSheet("color:#1b5e20; font-size:11px; padding:2px;")
         outer.addWidget(note)
+
+        self.board_label = QLabel()
+        self.board_label.setWordWrap(True)
+        self.board_label.setVisible(False)
+        self.board_label.setStyleSheet(
+            "background:#1b5e20; color:white; padding:7px; border-radius:3px;"
+        )
+        outer.addWidget(self.board_label)
 
         splitter = QSplitter(Qt.Orientation.Vertical)
         self.table = QTableWidget(0, len(COLUMNS))
@@ -122,6 +140,19 @@ class HistoryTab(QWidget):
         run = self._history.run_by_id(selected)
         return sorted(run.stocks, key=sort_key) if run else []
 
+    def set_reference(self, reference) -> None:
+        """Recompute the 6-month sector/subsector leaderboard from the bulk export."""
+        self._board = build_leaderboards(reference)
+        self.board_label.setText(self._board.summary())
+        self.board_label.setVisible(self._board.available)
+
+    def run_sector_tests(self, reference=None) -> None:
+        window = self.window()
+        if reference is None and hasattr(window, "leadership_tab"):
+            reference = window.leadership_tab.reference()
+        self.set_reference(reference)
+        self.refresh()
+
     # ---------------------------------------------------------------- rendering
 
     def _render_table(self) -> None:
@@ -131,13 +162,15 @@ class HistoryTab(QWidget):
         for row, snap in enumerate(self._rows):
             history = self._history.appearances(snap.symbol)
             last_seen = history[0][0].run_date.strftime("%d %b") if history else ""
+            trophy = has_trophy(snap, self._board)
             values = [
-                snap.symbol,
+                (f"{TROPHY} " if trophy else "") + snap.symbol,
                 snap.cap_category or "-",
                 snap.hit_display,
                 parameter_badges(snap.verdicts, snap.active_toggles),
                 snap.score_display,
                 snap.tier,
+                self._board.label("subsector", snap.peer_subsector) or "-",
                 snap.peer_summary or "-",
                 snap.headline_positive or "-",
                 str(len(history)),
@@ -145,6 +178,10 @@ class HistoryTab(QWidget):
             ]
             for col, value in enumerate(values):
                 item = QTableWidgetItem(value)
+                if col == 0:
+                    # The visible ticker may carry a trophy prefix; keep the bare
+                    # symbol on the item so nothing has to parse it back out.
+                    item.setData(Qt.ItemDataRole.UserRole, snap.symbol)
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 if col == 2:
                     item.setForeground(QColor("#1b5e20"))
@@ -191,5 +228,6 @@ class HistoryTab(QWidget):
 
     def _format_detail(self, snap: StockSnapshot) -> str:
         return format_snapshot_detail(
-            snap, self._history.appearances(snap.symbol), self._history.retention_days()
+            snap, self._history.appearances(snap.symbol), self._history.retention_days(),
+            board=self._board,
         )

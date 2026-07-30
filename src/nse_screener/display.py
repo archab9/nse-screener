@@ -71,7 +71,8 @@ def is_leader(rank: int | None) -> bool:
     return bool(rank and rank <= LEADER_RANKS)
 
 
-def format_snapshot_detail(snap, appearances=None, retention_days: int = 30) -> str:
+def format_snapshot_detail(snap, appearances=None, retention_days: int = 30,
+                           board=None) -> str:
     """Full stock detail, shared by History and Watchlist so they cannot diverge.
 
     `snap` is a run_history.StockSnapshot; `appearances` an optional list of
@@ -95,8 +96,24 @@ def format_snapshot_detail(snap, appearances=None, retention_days: int = 30) -> 
         lines.append(cap)
 
     if snap.peer_summary:
-        where = " / ".join(x for x in (snap.peer_subsector, snap.peer_sector) if x)
+        if board is not None:
+            sub = board.label("subsector", snap.peer_subsector)
+            sec = board.label("sector", snap.peer_sector)
+        else:
+            sub, sec = snap.peer_subsector, snap.peer_sector
+        where = " / ".join(x for x in (sub, sec) if x)
         lines.append(f"PEER RANK: {snap.peer_summary}    [{where}]")
+
+    if board is not None:
+        from .leaderboard import TROPHY, trophy_reasons
+
+        won, reasons = trophy_reasons(snap, board)
+        if won:
+            lines.append(f"{TROPHY}  TROPHY - wins on every parameter, tops its subsector, "
+                         f"and both its subsector and sector are top-3 over 6 months")
+        else:
+            lines.append("Trophy criteria:")
+            lines.extend(f"    {r}" for r in reasons)
 
     if snap.pegy is not None or snap.pb is not None:
         bits = []

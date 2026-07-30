@@ -168,6 +168,11 @@ class ScreenerWindow(QMainWindow):
         self.watchlist_tab.run_requested.connect(self._run_on_symbols)
         self.tabs.addTab(self.watchlist_tab, "Watchlist")
 
+        # Seed the 6-month sector/subsector leaderboard both tabs use for medals.
+        reference = self.leadership_tab.reference()
+        self.history_tab.set_reference(reference)
+        self.watchlist_tab.set_reference(reference)
+
         self.sectors_tab = SectorsTab()
         self.tabs.addTab(self.sectors_tab, "Sectors")
 
@@ -616,6 +621,11 @@ class ScreenerWindow(QMainWindow):
         Resolution is re-run here as well as after a screening run, because a refreshed
         reference export can classify stocks that were previously Unresolved.
         """
+        reference = self.leadership_tab.reference()
+        self.history_tab.set_reference(reference)
+        self.watchlist_tab.set_reference(reference)
+        self.history_tab.refresh()
+        self.watchlist_tab.refresh()
         if self._result is not None:
             self._resolve_classifications()
             self._render_table(self._toggles())

@@ -147,10 +147,13 @@ class TestRunHistoryTab:
         assert hits == sorted(hits, reverse=True), hits
 
     def test_clicking_a_stock_shows_its_breakdown(self, window):
+        from PyQt6.QtCore import Qt
+
         window.history_tab.table.selectRow(0)
         text = window.history_tab.detail.toPlainText()
-        symbol = window.history_tab.table.item(0, 0).text()
-        assert symbol in text
+        # The cell may be prefixed with a trophy; the bare symbol lives on the item.
+        symbol = window.history_tab.table.item(0, 0).data(Qt.ItemDataRole.UserRole)
+        assert symbol and symbol in text
         assert "parameters hit:" in text
         assert "P1 Record financials" in text
 

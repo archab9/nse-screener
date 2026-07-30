@@ -60,6 +60,11 @@
     "micro_cap_cr": 500
   },
 
+  "leaderboard": {
+    "_note": "Sectors and subsectors ranked by MEDIAN 6-month share price return of their constituents. Median resists one multi-bagger carrying a flat sector. Groups below min_constituents are excluded rather than allowed to win on a handful of names.",
+    "min_constituents": 5
+  },
+
   "history": {
     "_note": "Rolling window of screening runs kept on disk. Older runs are pruned on save.",
     "retention_days": 30

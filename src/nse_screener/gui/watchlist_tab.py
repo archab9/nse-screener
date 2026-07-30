@@ -27,14 +27,15 @@ from PyQt6.QtWidgets import (
 )
 
 from nse_screener.display import BADGE_LEGEND, format_snapshot_detail, parameter_badges
+from nse_screener.leaderboard import TROPHY, Leaderboards, build_leaderboards, has_trophy
 from nse_screener.run_history import RunHistory, StockSnapshot, sort_key
 from nse_screener.watchlist import Watchlist, WatchState
 
 COLUMNS = [
     "Symbol", "Cap", "Params hit", "Parameters", "Score", "Tier",
-    "Peer rank", "Biggest positive", "Note", "Added",
+    "Subsector (6m rank)", "Peer rank", "Biggest positive", "Note", "Added",
 ]
-COL_NOTE = 8
+COL_NOTE = 9
 LEADER_BG = QColor("#c8e6c9")
 
 
@@ -55,6 +56,7 @@ class WatchlistTab(QWidget):
         super().__init__(parent)
         self._watchlist = watchlist
         self._runs = runs
+        self._board = Leaderboards()
         self._rows: list[tuple[str, StockSnapshot | None]] = []
         self._loading = False
 
@@ -76,6 +78,14 @@ class WatchlistTab(QWidget):
         self.run_button.clicked.connect(self._run_watchlist)
         header.addWidget(self.run_button)
 
+        self.sector_button = QPushButton("Run sector / subsector tests")
+        self.sector_button.setToolTip(
+            "Rank every sector and subsector by median 6-month share price return, "
+            "award gold/silver/bronze, and re-check which stocks earn a trophy."
+        )
+        self.sector_button.clicked.connect(self.run_sector_tests)
+        header.addWidget(self.sector_button)
+
         remove = QPushButton("Remove selected")
         remove.clicked.connect(self._remove_selected)
         header.addWidget(remove)
@@ -86,6 +96,14 @@ class WatchlistTab(QWidget):
         )
         note.setStyleSheet("color:#1b5e20; font-size:11px; padding:2px;")
         outer.addWidget(note)
+
+        self.board_label = QLabel()
+        self.board_label.setWordWrap(True)
+        self.board_label.setVisible(False)
+        self.board_label.setStyleSheet(
+            "background:#1b5e20; color:white; padding:7px; border-radius:3px;"
+        )
+        outer.addWidget(self.board_label)
 
         splitter = QSplitter(Qt.Orientation.Vertical)
         self.table = QTableWidget(0, len(COLUMNS))
@@ -136,6 +154,19 @@ class WatchlistTab(QWidget):
             key=lambda r: (r[1] is None, sort_key(r[1]) if r[1] else (0, 0, 0, r[0])),
         )
 
+    def set_reference(self, reference) -> None:
+        """Recompute the 6-month sector/subsector leaderboard from the bulk export."""
+        self._board = build_leaderboards(reference)
+        self.board_label.setText(self._board.summary())
+        self.board_label.setVisible(self._board.available)
+
+    def run_sector_tests(self, reference=None) -> None:
+        window = self.window()
+        if reference is None and hasattr(window, "leadership_tab"):
+            reference = window.leadership_tab.reference()
+        self.set_reference(reference)
+        self.refresh()
+
     # ---------------------------------------------------------------- rendering
 
     def refresh(self) -> None:
@@ -145,13 +176,15 @@ class WatchlistTab(QWidget):
 
         for row, (symbol, snap) in enumerate(self._rows):
             entry = self._watchlist.entries.get(symbol)
+            trophy = bool(snap) and has_trophy(snap, self._board)
             values = [
-                symbol,
+                (f"{TROPHY} " if trophy else "") + symbol,
                 (snap.cap_category if snap else "") or "-",
                 snap.hit_display if snap else "not screened",
                 parameter_badges(snap.verdicts, snap.active_toggles) if snap else "-",
                 snap.score_display if snap else "-",
                 snap.tier if snap else "-",
+                (self._board.label("subsector", snap.peer_subsector) if snap else "") or "-",
                 (snap.peer_summary if snap else "") or "-",
                 (snap.headline_positive if snap else "") or "-",
                 entry.note if entry else "",
@@ -159,6 +192,10 @@ class WatchlistTab(QWidget):
             ]
             for col, value in enumerate(values):
                 item = QTableWidgetItem(value)
+                if col == 0:
+                    # The visible ticker may carry a trophy prefix; keep the bare
+                    # symbol on the item so nothing has to parse it back out.
+                    item.setData(Qt.ItemDataRole.UserRole, symbol)
                 if col != COL_NOTE:
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 if col == 2 and snap:
@@ -216,7 +253,8 @@ class WatchlistTab(QWidget):
             return
         self.detail.setPlainText(
             format_snapshot_detail(
-                snap, self._runs.appearances(symbol), self._runs.retention_days()
+                snap, self._runs.appearances(symbol), self._runs.retention_days(),
+                board=self._board,
             )
         )
 
@@ -230,18 +268,19 @@ class WatchlistTab(QWidget):
     def _on_item_changed(self, item: QTableWidgetItem) -> None:
         if self._loading or item.column() != COL_NOTE:
             return
-        symbol_item = self.table.item(item.row(), 0)
-        if symbol_item:
-            self._watchlist.set_note(symbol_item.text(), item.text())
+        if not (0 <= item.row() < len(self._rows)):
+            return
+        symbol = self._rows[item.row()][0]
+        if symbol:
+            self._watchlist.set_note(symbol, item.text())
             self._watchlist.save()
             self.changed.emit()
 
     def _remove_selected(self) -> None:
         rows = {index.row() for index in self.table.selectedIndexes()}
         for row in rows:
-            symbol_item = self.table.item(row, 0)
-            if symbol_item:
-                self._watchlist.set_state(symbol_item.text(), WatchState.REMOVED)
+            if 0 <= row < len(self._rows):
+                self._watchlist.set_state(self._rows[row][0], WatchState.REMOVED)
         if rows:
             self._watchlist.save()
             self.refresh()

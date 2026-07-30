@@ -72,6 +72,26 @@ returned nothing at all for smaller names Screener's industry table omits.
 Ranking needs the bulk sector export to include **Return over 1year / 3years / 5years**.
 Without those columns the Peer rank column reads `-` and everything else still works.
 
+**Medals and trophies** — press **Run sector / subsector tests** on History or Watchlist.
+Every sector and subsector is ranked by the **median six-month share price return** of its
+constituents, and the top three of each level get 🥇 🥈 🥉. Median rather than mean, so one
+multi-bagger cannot carry an otherwise flat sector; groups with fewer than five
+constituents are excluded rather than allowed to win on a handful of names.
+
+A stock earns 🏆 only when all four hold:
+
+1. every active parameter passed outright (YES, not PARTIAL)
+2. ranked #1 in its subsector on 1-year price return
+3. its subsector holds a medal
+4. its sector holds a medal
+
+Deliberately strict — a trophy that appeared often would say nothing. The detail view
+lists all four conditions with PASS/no against each, so it is always clear why a stock did
+or didn't get one. Medals are recomputed from the current export every time, never frozen
+into a saved run.
+
+This needs **Return over 6months** in the bulk export alongside the 1/3/5-year columns.
+
 The **Sector Leadership tab** is separate: it studies how widely fundamentals are
 improving across an industry, which is a different question.
 

@@ -368,9 +368,12 @@ def _():
 
 @check("GUI - clicking a stock shows its detailed results")
 def _():
+    from PyQt6.QtCore import Qt
+
     _win.history_tab.table.selectRow(0)
     text = _win.history_tab.detail.toPlainText()
-    symbol = _win.history_tab.table.item(0, 0).text()
+    # Ticker cells may carry a trophy prefix; the bare symbol lives on the item.
+    symbol = _win.history_tab.table.item(0, 0).data(Qt.ItemDataRole.UserRole)
     for expected in (symbol, "parameters hit:", "P1 Record financials", "Appeared in"):
         assert expected in text, expected
     return f"{len(text)} chars incl. per-parameter evidence and appearances"
@@ -432,9 +435,12 @@ def _():
     hits = [int(table.item(r, 2).text().split()[0]) for r in range(table.rowCount())]
     assert hits == sorted(hits, reverse=True), hits
 
+    from PyQt6.QtCore import Qt
+
     table.selectRow(0)
     text = _win.watchlist_tab.detail.toPlainText()
-    assert table.item(0, 0).text() in text and "Passed (" in text and "Failed (" in text
+    symbol = table.item(0, 0).data(Qt.ItemDataRole.UserRole)
+    assert symbol and symbol in text and "Passed (" in text and "Failed (" in text
     order = " > ".join(f"{table.item(r, 0).text()}({h})" for r, h in enumerate(hits))
     return order
 
@@ -454,12 +460,49 @@ def _():
     detail pane kept the previous stock's numbers beside a refreshed table."""
     tab = _win.history_tab
     tab.refresh()
+    from PyQt6.QtCore import Qt
+
     tab.table.selectRow(0)
-    first = tab.table.item(0, 0).text()
-    assert first in tab.detail.toPlainText()
+    first = tab.table.item(0, 0).data(Qt.ItemDataRole.UserRole)
+    assert first and first in tab.detail.toPlainText()
     tab.refresh()
-    assert tab.table.item(0, 0).text() in tab.detail.toPlainText()
+    assert tab.table.item(0, 0).data(Qt.ItemDataRole.UserRole) in tab.detail.toPlainText()
     return "detail matches row 0 after re-render"
+
+
+@check("GUI - medals, trophy and sector-test button")
+def _():
+    from nse_screener.leaderboard import GOLD, TROPHY
+
+    _win.history_tab.run_sector_tests()
+    _win.watchlist_tab.run_sector_tests()
+    board = _win.history_tab._board
+    assert board.available, "leaderboard should build from the fixture export"
+    assert [g.medal for g in board.sectors[:3]].count("") == 0, "top 3 need medals"
+
+    table = _win.history_tab.table
+    medalled = [table.item(r, 6).text() for r in range(table.rowCount())]
+    assert any(GOLD in m for m in medalled), medalled
+    trophies = [
+        table.item(r, 0).text() for r in range(table.rowCount())
+        if TROPHY in table.item(r, 0).text()
+    ]
+    assert trophies, "fixture should award exactly one trophy"
+    top = ", ".join(g.display for g in board.sectors[:3])
+    return f"trophy: {trophies[0]} | sectors: {top}"
+
+
+@check("GUI - trophy explains itself when not awarded")
+def _():
+    table = _win.history_tab.table
+    for r in range(table.rowCount()):
+        if "🏆" not in table.item(r, 0).text():
+            table.selectRow(r)
+            text = _win.history_tab.detail.toPlainText()
+            assert "Trophy criteria:" in text
+            start = text.index("Trophy criteria:")
+            return " | ".join(text[start:start + 400].splitlines()[1:5])
+    return "every row has a trophy (unexpected but not a failure)"
 
 
 @check("GUI - watchlist control and industry column")
