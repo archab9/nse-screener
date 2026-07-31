@@ -77,10 +77,15 @@ class TestLeaderboard:
         assert steady.horizon("return_6m").rank < skew.horizon("return_6m").rank
         assert steady.medal == GOLD
 
-    def test_thin_groups_are_excluded(self, tmp_path):
+    def test_thin_groups_are_listed_but_get_no_medal(self, tmp_path):
+        """Hiding them removed a large share of the subsectors in a real export, so they
+        are shown and marked instead."""
         rows = group("Big", "Big", 6, 10.0) + group("Tiny", "Tiny", 2, 500.0, 90)
         board = build_leaderboards(build(tmp_path, rows))
-        assert [g.name for g in board.sectors] == ["Big"]
+        assert {g.name for g in board.sectors} == {"Big", "Tiny"}
+        assert board.sector("Tiny").thin is True
+        assert board.sector("Tiny").medal == "", "a 2-company group must not take gold"
+        assert board.sector("Big").medal == GOLD
         assert board.skipped_thin >= 1
 
     def test_minimum_is_configurable(self, tmp_path):
@@ -109,10 +114,14 @@ class TestLeaderboard:
         assert "No sector reference" in board.summary()
 
     def test_no_return_columns_at_all_yields_nothing(self, tmp_path):
+        """A group with no return figure on any horizon has nothing to rank, which is not
+        the same as a group reporting few but real numbers."""
         rows = group("Ind", "Fast", 6, 40.0)
         for r in rows:
             r[12] = r[13] = r[14] = r[15] = ""
-        assert build_leaderboards(build(tmp_path, rows)).available is False
+        board = build_leaderboards(build(tmp_path, rows))
+        assert board.available is False
+        assert board.sectors == []
 
     def test_a_missing_horizon_does_not_disable_the_board(self, tmp_path):
         """Strength averages whatever horizons a group reports, so one gap is survivable."""

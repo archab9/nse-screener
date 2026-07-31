@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from nse_screener.gui import theme
 from nse_screener.display import BADGE_LEGEND, format_snapshot_detail, parameter_badges
 from nse_screener.leaderboard import TROPHY, Leaderboards, build_leaderboards, has_trophy
 from nse_screener.run_history import RunHistory, StockSnapshot, sort_key
@@ -36,7 +37,7 @@ COLUMNS = [
     "Peer rank", "Biggest positive", "Note", "Added",
 ]
 COL_NOTE = 8
-LEADER_BG = QColor("#c8e6c9")
+LEADER_BG, LEADER_FG = theme.LEADER_BG, theme.LEADER_FG
 
 
 def _top_quartile(snap) -> bool:
@@ -94,14 +95,14 @@ class WatchlistTab(QWidget):
         note = QLabel(
             "Sorted by parameters hit in the latest recorded run, most first.   " + BADGE_LEGEND
         )
-        note.setStyleSheet("color:#1b5e20; font-size:11px; padding:2px;")
+        note.setStyleSheet(theme.HINT_LABEL)
         outer.addWidget(note)
 
         self.board_label = QLabel()
         self.board_label.setWordWrap(True)
         self.board_label.setVisible(False)
         self.board_label.setStyleSheet(
-            "background:#1b5e20; color:white; padding:7px; border-radius:3px;"
+            theme.BANNER["good"]
         )
         outer.addWidget(self.board_label)
 
@@ -127,7 +128,7 @@ class WatchlistTab(QWidget):
 
         self.removed_label = QLabel()
         self.removed_label.setWordWrap(True)
-        self.removed_label.setStyleSheet("color:#666;")
+        self.removed_label.setStyleSheet(theme.MUTED_LABEL)
         outer.addWidget(self.removed_label)
 
         restore = QPushButton("Clear all 'removed' marks")
@@ -207,12 +208,13 @@ class WatchlistTab(QWidget):
                 if col != COL_NOTE:
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 if col == 2 and snap:
-                    item.setForeground(QColor("#1b5e20"))
+                    item.setForeground(QColor(theme.GREEN_TEXT))
                     font = item.font()
                     font.setBold(True)
                     item.setFont(font)
                 if snap and _top_quartile(snap):
                     item.setBackground(LEADER_BG)
+                    item.setForeground(LEADER_FG)
                 self.table.setItem(row, col, item)
 
         self.table.resizeRowsToContents()

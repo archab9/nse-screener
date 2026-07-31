@@ -27,6 +27,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from nse_screener.gui import theme
 from nse_screener.display import BADGE_LEGEND, format_snapshot_detail, parameter_badges
 from nse_screener.leaderboard import TROPHY, Leaderboards, build_leaderboards, has_trophy
 from nse_screener.run_history import RunHistory, StockSnapshot, sort_key
@@ -37,7 +38,7 @@ COLUMNS = [
 ]
 
 ALL_RUNS = "__all__"
-LEADER_BG = QColor("#c8e6c9")
+LEADER_BG, LEADER_FG = theme.LEADER_BG, theme.LEADER_FG
 
 
 def _top_quartile(snap) -> bool:
@@ -79,21 +80,21 @@ class HistoryTab(QWidget):
 
         self.summary = QLabel()
         self.summary.setWordWrap(True)
-        self.summary.setStyleSheet("color:#555; padding:2px;")
+        self.summary.setStyleSheet(theme.MUTED_LABEL)
         outer.addWidget(self.summary)
 
         note = QLabel(
             "Sorted by parameters hit (YES verdicts on active parameters), most first. "
             "Click a stock for its full breakdown.   " + BADGE_LEGEND
         )
-        note.setStyleSheet("color:#1b5e20; font-size:11px; padding:2px;")
+        note.setStyleSheet(theme.HINT_LABEL)
         outer.addWidget(note)
 
         self.board_label = QLabel()
         self.board_label.setWordWrap(True)
         self.board_label.setVisible(False)
         self.board_label.setStyleSheet(
-            "background:#1b5e20; color:white; padding:7px; border-radius:3px;"
+            theme.BANNER["good"]
         )
         outer.addWidget(self.board_label)
 
@@ -192,12 +193,13 @@ class HistoryTab(QWidget):
                     item.setData(Qt.ItemDataRole.UserRole, snap.symbol)
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 if col == 2:
-                    item.setForeground(QColor("#1b5e20"))
+                    item.setForeground(QColor(theme.GREEN_TEXT))
                     font = item.font()
                     font.setBold(True)
                     item.setFont(font)
                 if _top_quartile(snap):
                     item.setBackground(LEADER_BG)
+                    item.setForeground(LEADER_FG)
                 self.table.setItem(row, col, item)
 
         runs = len(self._history.runs)

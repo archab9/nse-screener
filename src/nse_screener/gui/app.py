@@ -64,6 +64,7 @@ from nse_screener.display import (
 from nse_screener.peer_ranking import cap_category, rank_symbol
 from nse_screener.gui.kite_dialog import KiteSettingsDialog
 from nse_screener.gui.login_dialog import ScreenerLoginDialog
+from nse_screener.gui import theme
 from nse_screener.gui.history_tab import HistoryTab
 from nse_screener.gui.sector_leadership_tab import SectorLeadershipTab
 from nse_screener.gui.sector_ranks_tab import SectorRanksTab
@@ -80,24 +81,12 @@ from nse_screener.stage1.symbols import hits_from_text, load_symbol_file
 from nse_screener.stage2.screener_client import has_credentials
 from nse_screener.watchlist import Watchlist, WatchState
 
-TIER_COLOURS = {
-    Tier.ELITE_COMPOUNDER: "#1b5e20",
-    Tier.QUALITY_GROWER: "#2e7d32",
-    Tier.WATCHLIST: "#e65100",
-    Tier.EXCLUDED: "#757575",
-}
+TIER_COLOURS = {tier: theme.TIER_TEXT[tier.value] for tier in Tier}
 
-SEVERITY_STYLE = {
-    "error": "background:#b71c1c; color:white; padding:7px; border-radius:3px;",
-    "warning": "background:#ef6c00; color:white; padding:7px; border-radius:3px;",
-    "info": "background:#1565c0; color:white; padding:7px; border-radius:3px;",
-}
+SEVERITY_STYLE = theme.BANNER
 
-LEADER_BG = QColor("#c8e6c9")   # tailwind sector AND top-3 by market cap
-LEADER_FG = QColor("#1b5e20")
-
-UNRESOLVED_BG = QColor("#f5f5f5")
-UNRESOLVED_FG = QColor("#6a1b9a")
+LEADER_BG, LEADER_FG = theme.LEADER_BG, theme.LEADER_FG
+UNRESOLVED_BG, UNRESOLVED_FG = theme.UNRESOLVED_BG, theme.UNRESOLVED_FG
 
 COLUMNS = [
     "Ticker", "Cap", "Industry", "Params hit", "Parameters", "Score", "Tier",
@@ -137,6 +126,13 @@ class ScreenerWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("NSE Two-Stage Screener")
         self.resize(1500, 950)
+
+        # Applied here rather than only in main(), so any entry point gets it. Several
+        # cells paint their own background; against the default light palette those sat
+        # behind light text and were unreadable.
+        app = QApplication.instance()
+        if app is not None:
+            theme.apply(app)
 
         self._result: PipelineResult | None = None
         self._ranked: list[ScoredStock] = []
@@ -207,7 +203,7 @@ class ScreenerWindow(QMainWindow):
         layout.addWidget(self.progress)
 
         self.status = QLabel("Choose an input, then press Generate Results.")
-        self.status.setStyleSheet("color:#555; padding:2px;")
+        self.status.setStyleSheet(theme.MUTED_LABEL)
         layout.addWidget(self.status)
 
         self.summary = QLabel(summary_line(self._toggles()))
@@ -218,7 +214,7 @@ class ScreenerWindow(QMainWindow):
             "Green row = top-quartile peer rank in its subsector.   " + BADGE_LEGEND
         )
         self.legend.setWordWrap(True)
-        self.legend.setStyleSheet("color:#1b5e20; font-size:11px; padding:2px;")
+        self.legend.setStyleSheet(theme.HINT_LABEL)
         layout.addWidget(self.legend)
 
         splitter = QSplitter(Qt.Orientation.Vertical)
@@ -273,7 +269,7 @@ class ScreenerWindow(QMainWindow):
         row1.addWidget(self.browse_button)
 
         self.input_label = QLabel()
-        self.input_label.setStyleSheet("color:#555;")
+        self.input_label.setStyleSheet(theme.MUTED_LABEL)
         row1.addWidget(self.input_label, stretch=1)
         outer.addLayout(row1)
 
@@ -302,7 +298,7 @@ class ScreenerWindow(QMainWindow):
         row2.addWidget(kite_button)
 
         self.login_label = QLabel()
-        self.login_label.setStyleSheet("color:#555;")
+        self.login_label.setStyleSheet(theme.MUTED_LABEL)
         row2.addWidget(self.login_label, stretch=1)
         outer.addLayout(row2)
 
@@ -741,13 +737,13 @@ class ScreenerWindow(QMainWindow):
                     item.setFont(font)
                 if leader:
                     item.setBackground(LEADER_BG)
+                    item.setForeground(LEADER_FG)
                     if col in (0, COL_LEADER):
-                        item.setForeground(LEADER_FG)
                         item.setToolTip("\n".join(ranking.table()))
                 elif unresolved and not industry:
                     item.setBackground(UNRESOLVED_BG)
+                    item.setForeground(UNRESOLVED_FG)
                     if col in (0, COL_INDUSTRY):
-                        item.setForeground(UNRESOLVED_FG)
                         item.setToolTip(
                             "Industry unknown - not found in the sector reference export and "
                             "not supplied by Screener.in, so no leadership check is possible."

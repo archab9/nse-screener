@@ -63,9 +63,14 @@ Strength is the mean of the group's percentile position across the horizons it r
 because +40% means very different things over six months and five years. Horizons are
 equally weighted; any other weighting would be an unbacked judgement.
 
-Median, not mean, so one multi-bagger cannot carry a flat group. Groups below the minimum
-constituent count are excluded rather than allowed to win on two or three names. Equal
-returns share a rank rather than being ordered alphabetically.
+**Every** sector and subsector is listed, always. Groups with fewer than the minimum
+constituent count are shown greyed and marked *(thin)* and cannot win a medal — a median
+over two names is not a sector view — but they are never hidden. Hiding them removed a
+large share of the subsectors in a real export.
+
+Median, not mean, so one multi-bagger cannot carry a flat group. Equal returns share a
+rank rather than being ordered alphabetically. "Rank in level" is the group's place among
+sectors, or among subsectors, so the two sequences are independent.
 
 Gold, silver and bronze go to the top three of each level on the six-month horizon.
 
@@ -127,6 +132,14 @@ snapshots for trend, and a manual Auto / Force Yes / Force No per Industry.
 
 **Sectors** — the five tailwind sectors, their rationale, how stale the review is, and
 which of this run's stocks fall in each (leaders separated from plain members).
+
+## Appearance
+
+The app applies its own dark theme rather than following Windows, so it looks the same
+either way. Several cells paint their own background — medal rows, leader highlights,
+unresolved markers — and against a light palette those sat behind light text and became
+unreadable. The rule for anything added later: whenever a cell sets a background, set its
+foreground too.
 
 ## Where state lives
 

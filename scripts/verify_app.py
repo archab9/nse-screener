@@ -476,9 +476,19 @@ def _():
 
 @check("GUI - Sector Ranks tab: all horizons + strength, sorted")
 def _():
+    from nse_screener.sector_reference import load_sector_reference
+
     tab = _win.sector_ranks_tab
     tab.run_tests()
-    assert tab.table.rowCount() > 0, "sector ranks table should populate"
+    reference = load_sector_reference()
+    sectors = {r.sector for r in reference.rows if r.sector}
+    subs = {r.subsector for r in reference.rows if r.subsector}
+    board = tab.board()
+    # Every group in the export must appear - hiding thin ones removed a large share of
+    # the subsectors in a real export.
+    assert len(board.sectors) == len(sectors), (len(board.sectors), len(sectors))
+    assert len(board.subsectors) == len(subs), (len(board.subsectors), len(subs))
+    assert tab.table.rowCount() == len(sectors) + len(subs)
     headers = [tab.table.horizontalHeaderItem(i).text() for i in range(tab.table.columnCount())]
     for expected in ("6m return", "1y return", "3y return", "5y return", "Strength"):
         assert expected in headers, headers
@@ -489,7 +499,30 @@ def _():
     ]
     assert strengths == sorted(strengths, reverse=True), strengths
     top = tab.table.item(0, 1).text()
-    return f"{tab.table.rowCount()} groups, strongest first: {top} ({strengths[0]})"
+    thin = sum(1 for g in board.all_groups() if g.thin)
+    assert all(not g.medal for g in board.all_groups() if g.thin), "thin groups must not medal"
+    return (f"{tab.table.rowCount()} groups (all {len(sectors)} sectors + {len(subs)} "
+            f"subsectors, {thin} thin), strongest first: {top} ({strengths[0]})")
+
+
+@check("GUI - dark theme applied with readable contrast")
+def _():
+    from PyQt6.QtGui import QPalette
+
+    from nse_screener.gui import theme
+
+    palette = _app.palette()
+    window = palette.color(QPalette.ColorRole.Window)
+    text = palette.color(QPalette.ColorRole.WindowText)
+    assert window.lightness() < 90, f"window should be dark, got {window.lightness()}"
+    assert text.lightness() > 170, f"text should be light, got {text.lightness()}"
+    # Anything that paints a background must paint a foreground too, or it inherits the
+    # theme's light text onto a light fill.
+    assert theme.LEADER_BG.lightness() < 110
+    assert theme.LEADER_FG.lightness() > 130
+    assert all(c.lightness() < 110 for c in theme.MEDAL_BG)
+    return (f"window L={window.lightness()} text L={text.lightness()}; "
+            f"highlight fills all dark with light foregrounds")
 
 
 @check("GUI - P8 gives an actual peer rank, not a top-3 flag")
@@ -514,7 +547,11 @@ def _():
     _win.watchlist_tab.run_sector_tests()
     board = _win.history_tab._board
     assert board.available, "leaderboard should build from the fixture export"
-    assert [g.medal for g in board.sectors[:3]].count("") == 0, "top 3 need medals"
+    # Sorted on strength, and a thin group can top that without earning a medal, so check
+    # the medals themselves rather than the first three rows.
+    medalled = [g for g in board.sectors if g.medal]
+    assert len(medalled) == 3, [g.name for g in medalled]
+    assert all(not g.thin for g in medalled)
 
     # Medals now live on the Sector Ranks tab; History keeps only the trophy.
     assert any(GOLD in g.medal for g in board.sectors), [g.medal for g in board.sectors]

@@ -4,8 +4,11 @@ Every sector and subsector in the bulk export is ranked on the MEDIAN share pric
 of its constituents over 6 months, 1, 3 and 5 years, plus an overall strength score.
 
 Median rather than mean deliberately: one multi-bagger should not carry an otherwise flat
-sector, and the question is whether the group as a whole is moving. Groups with too few
-constituents are excluded rather than allowed to win on two or three names.
+sector, and the question is whether the group as a whole is moving.
+
+EVERY group is listed. Groups with fewer than min_constituents companies are marked thin
+and barred from medals - a median over two names is not a sector view - but they are never
+hidden. Dropping them silently removed a large share of the subsectors in a real export.
 
 Strength score is the mean of the group's percentile position across the horizons it
 reports, on a 0-100 scale where 100 is the best group in the market. Horizons are equally
@@ -74,6 +77,7 @@ class GroupPerformance:
     strength: float | None = None
     rank: int = 0
     medal: str = ""
+    thin: bool = False      # too few constituents for the median to mean much
 
     def horizon(self, key: str) -> HorizonResult:
         return self.horizons.get(key, HorizonResult())
@@ -132,8 +136,8 @@ class Leaderboards:
         return (
             f"Sectors leading (6m median return): {top_sectors}\n"
             f"Subsectors leading: {top_subs}\n"
-            f"{len(self.sectors)} sector(s) and {len(self.subsectors)} subsector(s) ranked; "
-            f"{self.skipped_thin} group(s) skipped for having too few constituents."
+            f"{len(self.sectors)} sector(s) and {len(self.subsectors)} subsector(s) listed; "
+            f"{self.skipped_thin} marked thin (too few constituents for a medal)."
         )
 
 
@@ -146,10 +150,13 @@ def _build_level(buckets: dict[str, dict[str, list[float]]], level: str, minimum
         if not name:
             continue
         size = max((len(v) for v in by_horizon.values()), default=0)
-        if size < minimum:
-            skipped += 1
+        if size == 0:
+            # No return figure on any horizon: there is nothing to rank, as distinct from
+            # a group that reports few but real numbers.
             continue
-        group = GroupPerformance(name=name, level=level, constituents=size)
+        thin = size < minimum
+        skipped += thin
+        group = GroupPerformance(name=name, level=level, constituents=size, thin=thin)
         for key, _label in HORIZONS:
             values = by_horizon.get(key) or []
             if values:
@@ -175,8 +182,12 @@ def _build_level(buckets: dict[str, dict[str, list[float]]], level: str, minimum
             rank = previous_rank if value == previous_value else position
             previous_value, previous_rank = value, rank
             result.rank, result.total = rank, len(scored)
-            if key == MEDAL_HORIZON and rank <= len(MEDALS):
-                group.medal = MEDALS[rank - 1]
+        # Medals rank only the groups big enough to carry a meaningful median, so a
+        # two-company subsector cannot take gold on one lucky name.
+        if key == MEDAL_HORIZON:
+            for position, group in enumerate([g for g in scored if not g.thin], start=1):
+                if position <= len(MEDALS):
+                    group.medal = MEDALS[position - 1]
 
     for group in groups:
         scores = [

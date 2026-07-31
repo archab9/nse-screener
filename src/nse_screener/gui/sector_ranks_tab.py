@@ -25,23 +25,26 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from nse_screener.gui import theme
 from nse_screener.leaderboard import HORIZONS, Leaderboards, build_leaderboards
 
-COLUMNS = ["Rank", "Name", "Level", "Companies"] + [
+COLUMNS = ["Rank in level", "Name", "Level", "Parent sector", "Companies"] + [
     f"{label} return" for _key, label in HORIZONS
 ] + ["Strength"]
 
 ALL, SECTORS_ONLY, SUBSECTORS_ONLY = "all", "sector", "subsector"
 
-MEDAL_BG = (QColor("#fff8e1"), QColor("#f5f5f5"), QColor("#fbe9e7"))
-STRONG_FG = QColor("#1b5e20")
-WEAK_FG = QColor("#b71c1c")
+MEDAL_BG = theme.MEDAL_BG
+STRONG_FG = QColor(theme.GREEN_TEXT)
+WEAK_FG = QColor(theme.RED_TEXT)
+THIN_FG = theme.THIN_FG
 
 
 class SectorRanksTab(QWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._board = Leaderboards()
+        self._parents: dict[str, str] = {}
         self._rows = []
 
         outer = QVBoxLayout(self)
@@ -50,10 +53,13 @@ class SectorRanksTab(QWidget):
             "Every sector and subsector ranked on the MEDIAN share price return of its "
             "constituents. Median, not mean, so one multi-bagger cannot carry a flat "
             "group. Strength is the average percentile position across the four horizons "
-            "(100 = best in market); the table sorts on it, strongest first."
+            "(100 = best in market); the table sorts on it, strongest first. EVERY group "
+            "is listed - those with too few companies are greyed and barred from medals, "
+            "never hidden. 'Rank in level' is the group's place among sectors, or among "
+            "subsectors, so the two sequences are independent."
         )
         blurb.setWordWrap(True)
-        blurb.setStyleSheet("background:#1565c0; color:white; padding:8px; border-radius:3px;")
+        blurb.setStyleSheet(theme.BANNER["info"])
         outer.addWidget(blurb)
 
         controls = QHBoxLayout()
@@ -79,7 +85,7 @@ class SectorRanksTab(QWidget):
 
         self.status = QLabel()
         self.status.setWordWrap(True)
-        self.status.setStyleSheet("color:#555; padding:2px;")
+        self.status.setStyleSheet(theme.MUTED_LABEL)
         outer.addWidget(self.status)
 
         self.table = QTableWidget(0, len(COLUMNS))
@@ -87,9 +93,10 @@ class SectorRanksTab(QWidget):
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self.table.setColumnWidth(0, 55)
+        self.table.setColumnWidth(0, 90)
         self.table.setColumnWidth(2, 90)
-        self.table.setColumnWidth(3, 85)
+        self.table.setColumnWidth(3, 170)
+        self.table.setColumnWidth(4, 95)
         outer.addWidget(self.table, stretch=1)
 
         self._render()
@@ -101,6 +108,11 @@ class SectorRanksTab(QWidget):
 
     def set_reference(self, reference) -> None:
         self._board = build_leaderboards(reference)
+        # Subsector -> its sector, so the table can show the hierarchy.
+        self._parents = {}
+        for row in getattr(reference, "rows", []) or []:
+            if row.subsector and row.sector:
+                self._parents.setdefault(row.subsector, row.sector)
         self._render()
 
     def run_tests(self, reference=None) -> None:
@@ -113,6 +125,10 @@ class SectorRanksTab(QWidget):
             tab = getattr(window, name, None)
             if tab is not None:
                 tab.set_board(self._board)
+
+    def _parent_of(self, group) -> str:
+        """Which sector a subsector belongs to, from the loaded export."""
+        return self._parents.get(group.name, "") if group.level == "subsector" else ""
 
     def _visible(self):
         level = self.level_combo.currentData()
@@ -138,7 +154,8 @@ class SectorRanksTab(QWidget):
                 str(group.rank),
                 f"{group.medal} {group.name}".strip(),
                 group.level.capitalize(),
-                str(group.constituents),
+                self._parent_of(group) or "-",
+                str(group.constituents) + (" (thin)" if group.thin else ""),
             ]
             values += [group.horizon(key).display for key, _label in HORIZONS]
             values.append(group.strength_display)
@@ -151,19 +168,26 @@ class SectorRanksTab(QWidget):
                     font.setBold(True)
                     item.setFont(font)
                     item.setForeground(STRONG_FG if group.strength >= 50 else WEAK_FG)
-                if group.medal and col < 2:
-                    item.setBackground(MEDAL_BG[min(row, len(MEDAL_BG) - 1)])
+                if group.thin:
+                    item.setForeground(THIN_FG)
+                    font = item.font()
+                    font.setItalic(True)
+                    item.setFont(font)
+                elif group.medal and col < 2:
+                    index = "🥇🥈🥉".find(group.medal[0]) if group.medal else -1
+                    item.setBackground(MEDAL_BG[max(index, 0)])
+                    item.setForeground(QColor(theme.BRIGHT))
                 self.table.setItem(row, col, item)
 
         if not self._board.available:
             self.status.setText(self._board.summary())
-            self.status.setStyleSheet("color:#b71c1c; padding:2px;")
+            self.status.setStyleSheet(theme.BANNER["error"])
             return
 
         best = self._rows[0] if self._rows else None
         self.status.setText(
             f"{len(self._rows)} group(s) shown, strongest first"
             + (f" - leading: {best.name} (strength {best.strength_display})" if best else "")
-            + f". {self._board.skipped_thin} group(s) skipped for too few constituents."
+            + f". {self._board.skipped_thin} marked thin (shown, but no medal)."
         )
-        self.status.setStyleSheet("color:#555; padding:2px;")
+        self.status.setStyleSheet(theme.MUTED_LABEL)
