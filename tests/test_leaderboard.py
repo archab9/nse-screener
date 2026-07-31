@@ -64,11 +64,18 @@ class TestLeaderboard:
         assert board.sectors[0].name == "A"
 
     def test_ranked_by_median_not_mean(self, tmp_path):
-        """One runaway winner must not carry an otherwise flat sector."""
+        """One runaway winner must not carry an otherwise flat sector.
+
+        Checked on the six-month horizon directly: the table now sorts on strength across
+        four horizons, so the whole-list order answers a broader question than this one.
+        """
         flat = group("Steady", "Steady", 6, 20.0)
         skewed = group("Skewed", "Skewed", 5, 5.0, 50) + [row("MOON", "Skewed", "Skewed", 900.0)]
         board = build_leaderboards(build(tmp_path, flat + skewed))
-        assert board.sectors[0].name == "Steady"
+        steady = board.sector("Steady")
+        skew = board.sector("Skewed")
+        assert steady.horizon("return_6m").rank < skew.horizon("return_6m").rank
+        assert steady.medal == GOLD
 
     def test_thin_groups_are_excluded(self, tmp_path):
         rows = group("Big", "Big", 6, 10.0) + group("Tiny", "Tiny", 2, 500.0, 90)
@@ -80,7 +87,8 @@ class TestLeaderboard:
         rows = group("Big", "Big", 6, 10.0) + group("Tiny", "Tiny", 2, 500.0, 90)
         config.save_overrides({"leaderboard": {"min_constituents": 2}})
         board = build_leaderboards(build(tmp_path, rows))
-        assert board.sectors[0].name == "Tiny"
+        assert {g.name for g in board.sectors} == {"Big", "Tiny"}
+        assert board.sector("Tiny").medal == GOLD, "best 6m return takes gold"
 
     def test_sectors_and_subsectors_rank_separately(self, tmp_path):
         rows = group("Ind", "Fast", 6, 40.0) + group("Ind", "Slow", 6, 5.0, 10)
@@ -100,11 +108,40 @@ class TestLeaderboard:
         assert board.medal_for("sector", "X") == ""
         assert "No sector reference" in board.summary()
 
-    def test_missing_six_month_column_yields_nothing(self, tmp_path):
+    def test_no_return_columns_at_all_yields_nothing(self, tmp_path):
         rows = group("Ind", "Fast", 6, 40.0)
         for r in rows:
-            r[12] = ""
+            r[12] = r[13] = r[14] = r[15] = ""
         assert build_leaderboards(build(tmp_path, rows)).available is False
+
+    def test_a_missing_horizon_does_not_disable_the_board(self, tmp_path):
+        """Strength averages whatever horizons a group reports, so one gap is survivable."""
+        rows = group("Ind", "Fast", 6, 40.0) + group("Other", "Slow", 6, 10.0, 20)
+        for r in rows:
+            r[12] = ""      # no six-month figure anywhere
+        board = build_leaderboards(build(tmp_path, rows))
+        assert board.available is True
+        assert board.sector("Ind").strength is not None
+        assert board.sector("Ind").horizon("return_6m").median_return is None
+
+    def test_strength_averages_percentile_across_horizons(self, tmp_path):
+        rows = (group("Top", "Top", 6, 90.0) + group("Mid", "Mid", 6, 50.0, 20)
+                + group("Low", "Low", 6, 10.0, 40))
+        board = build_leaderboards(build(tmp_path, rows))
+        assert [g.name for g in board.sectors] == ["Top", "Mid", "Low"]
+        # 6m and 1y separate them; 3y and 5y are identical for every group in this fixture
+        # and therefore tie at rank 1, lifting everyone equally.
+        assert board.sector("Top").strength == 100.0
+        assert board.sector("Top").strength > board.sector("Mid").strength
+        assert board.sector("Mid").strength > board.sector("Low").strength
+
+    def test_equal_returns_share_a_rank(self, tmp_path):
+        """Regression: ties were ordered by name, handing a better rank to whichever group
+        started with an earlier letter."""
+        rows = group("Zeta", "Zeta", 6, 40.0) + group("Alpha", "Alpha", 6, 40.0, 20)
+        board = build_leaderboards(build(tmp_path, rows))
+        assert board.sector("Zeta").horizon("return_6m").rank == 1
+        assert board.sector("Alpha").horizon("return_6m").rank == 1
 
 
 class Snap:

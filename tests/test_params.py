@@ -11,7 +11,6 @@ from nse_screener.stage2.fundamentals import (
     _quarter_sort_key,
 )
 from nse_screener.stage2.params import (
-    classify_tailwind_sector,
     evaluate_p1,
     evaluate_p2,
     evaluate_p4,
@@ -230,29 +229,6 @@ class TestP7Valuation:
     def test_negative_growth_is_no_not_a_crash(self):
         c = company(pe=15.0, pb=2.0, eps_cagr_pct=-20.0, dividend_yield_pct=1.0)
         assert evaluate_p7(c, self.SECTORS).verdict is Verdict.NO
-
-
-class TestSectorClassification:
-    def test_it_services_is_excluded_despite_broker_lists(self):
-        assert classify_tailwind_sector("Software - Application") is None
-        assert classify_tailwind_sector("IT Services & Consulting") is None
-
-    def test_five_tailwind_sectors_map(self):
-        assert classify_tailwind_sector("Private Sector Bank") == "Private financials"
-        assert classify_tailwind_sector("Aerospace & Defence") == "Defense & strategic manufacturing"
-        assert classify_tailwind_sector("Solar Energy Equipment") == "Renewable & clean energy value chain"
-        assert classify_tailwind_sector("Auto Ancillary") == "Consumption discretionary"
-
-    def test_unrelated_industry_is_not_a_tailwind(self):
-        assert classify_tailwind_sector("Pharmaceuticals") is None
-        assert classify_tailwind_sector("Hotels & Resorts") is None
-        assert classify_tailwind_sector("") is None
-
-    def test_matching_is_keyword_based_and_first_match_wins(self):
-        """Documents a known limitation: an industry containing two sectors' keywords
-        resolves to whichever sector is declared first in sector_map.json. Spec section 7
-        warns about exactly this taxonomy drift - revisit if the mapping misfires."""
-        assert classify_tailwind_sector("Diamond & Jewellery Mining") == "Consumption discretionary"
 
 
 class TestQuarterParsing:

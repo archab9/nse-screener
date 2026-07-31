@@ -5,8 +5,9 @@ A two-stage screener for stocks listed on India's National Stock Exchange (NSE).
 **Stage 1** — you upload a Chartink momentum/volume scan export, which narrows the NSE
 universe to breakout-day candidates. **Stage 2** — each survivor is scored against seven
 weighted fundamental parameters pulled live from Screener.in using your Premium login,
-then tiered and ranked. Sector tailwind is reported as a separate flag, never folded into
-the score.
+then tiered and ranked. **P8** reports where each stock ranks among its sector and subsector peers on one-year
+price return — the actual position, not a top-3 flag. Like all of P8's predecessors it is
+reported separately and never folded into the score.
 
 ## Status
 
@@ -50,6 +51,23 @@ stock's latest recorded run. Click any stock for the same full detail History sh
 **Run filter on entire watchlist** screens every watchlist stock through the normal
 pipeline in one press. "Removed" is a distinct state from "never seen", so a stock you
 dismissed stays dismissed instead of resurfacing as new.
+
+## Sector Ranks tab
+
+Every sector and subsector in the bulk export, one row each, ranked on the **median share
+price return** of its constituents over **6 months, 1, 3 and 5 years**, with an overall
+**strength score** in the last column. Sorted strongest first.
+
+Strength is the mean of the group's percentile position across the horizons it reports,
+0-100 where 100 is the best group in the market — a position rather than a raw number,
+because +40% means very different things over six months and five years. Horizons are
+equally weighted; any other weighting would be an unbacked judgement.
+
+Median, not mean, so one multi-bagger cannot carry a flat group. Groups below the minimum
+constituent count are excluded rather than allowed to win on two or three names. Equal
+returns share a rank rather than being ordered alphabetically.
+
+Gold, silver and bronze go to the top three of each level on the six-month horizon.
 
 ## Peer rank and market cap
 

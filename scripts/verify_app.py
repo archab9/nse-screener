@@ -54,7 +54,8 @@ def _():
 
     mods = [
         "config", "models", "scoring", "report", "pipeline", "thresholds", "watchlist",
-        "sectors", "breadth", "classification", "sector_reference", "sector_history",
+        "leaderboard", "peer_ranking", "breadth", "classification",
+        "sector_reference", "sector_history",
         "symbol_utils", "concall", "run_history", "stage1.csv_import", "stage1.symbols",
         "stage2.fundamentals", "stage2.params", "stage2.screener_client", "market.kite",
         "backtest.forward_returns",
@@ -80,6 +81,7 @@ def _():
 
 @check("stage 2 - local load and all 8 parameters")
 def _():
+    from nse_screener.sector_reference import load_sector_reference
     from nse_screener.stage2 import params as P
     from nse_screener.stage2.fundamentals import load_fundamentals, load_sector_index_valuations
 
@@ -87,7 +89,9 @@ def _():
     company = store.get("NEWGEN")
     verdicts = {f"P{i}": getattr(P, f"evaluate_p{i}")(company).verdict.name for i in range(1, 7)}
     verdicts["P7"] = P.evaluate_p7(company, load_sector_index_valuations()).verdict.name
-    verdicts["P8"] = P.evaluate_p8(company, []).verdict.name
+    verdicts["P8"] = P.evaluate_p8(company, load_sector_reference()).verdict.name
+    # A wrong argument type must degrade, not crash the run.
+    assert P.evaluate_p8(company, []).verdict.label == "N/A"
     return " ".join(f"{k}={v}" for k, v in verdicts.items())
 
 
@@ -470,6 +474,38 @@ def _():
     return "detail matches row 0 after re-render"
 
 
+@check("GUI - Sector Ranks tab: all horizons + strength, sorted")
+def _():
+    tab = _win.sector_ranks_tab
+    tab.run_tests()
+    assert tab.table.rowCount() > 0, "sector ranks table should populate"
+    headers = [tab.table.horizontalHeaderItem(i).text() for i in range(tab.table.columnCount())]
+    for expected in ("6m return", "1y return", "3y return", "5y return", "Strength"):
+        assert expected in headers, headers
+    strengths = [
+        float(tab.table.item(r, len(headers) - 1).text())
+        for r in range(tab.table.rowCount())
+        if tab.table.item(r, len(headers) - 1).text() not in ("-", "")
+    ]
+    assert strengths == sorted(strengths, reverse=True), strengths
+    top = tab.table.item(0, 1).text()
+    return f"{tab.table.rowCount()} groups, strongest first: {top} ({strengths[0]})"
+
+
+@check("GUI - P8 gives an actual peer rank, not a top-3 flag")
+def _():
+    ranked = [(s.symbol, s.results["P8"]) for s in _win._ranked if "P8" in s.results]
+    with_rank = [(sym, r) for sym, r in ranked if r.evidence.get("Rank in subsector")]
+    assert with_rank, "P8 should rank stocks found in the reference"
+    out = []
+    for sym, result in with_rank[:3]:
+        sub = result.evidence["Rank in subsector"]
+        sec = result.evidence["Rank in sector"]
+        assert "of" in sub, sub
+        out.append(f"{sym} {sub} sub / {sec} sec")
+    return "; ".join(out)
+
+
 @check("GUI - medals, trophy and sector-test button")
 def _():
     from nse_screener.leaderboard import GOLD, TROPHY
@@ -480,9 +516,9 @@ def _():
     assert board.available, "leaderboard should build from the fixture export"
     assert [g.medal for g in board.sectors[:3]].count("") == 0, "top 3 need medals"
 
+    # Medals now live on the Sector Ranks tab; History keeps only the trophy.
+    assert any(GOLD in g.medal for g in board.sectors), [g.medal for g in board.sectors]
     table = _win.history_tab.table
-    medalled = [table.item(r, 6).text() for r in range(table.rowCount())]
-    assert any(GOLD in m for m in medalled), medalled
     trophies = [
         table.item(r, 0).text() for r in range(table.rowCount())
         if TROPHY in table.item(r, 0).text()
@@ -515,8 +551,6 @@ def _():
     combo.setCurrentIndex(combo.findData(WatchState.WATCHING))
     watched = _win._watchlist.state_of(symbol) is WatchState.WATCHING
     combo.setCurrentIndex(combo.findData(WatchState.NONE))
-    _win.sectors_tab.refresh(_win._ranked)
-
     industries = {
         _win.table.item(r, 0).text(): _win.table.item(r, COL_INDUSTRY).text()
         for r in range(_win.table.rowCount())

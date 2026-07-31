@@ -66,7 +66,7 @@ from nse_screener.gui.kite_dialog import KiteSettingsDialog
 from nse_screener.gui.login_dialog import ScreenerLoginDialog
 from nse_screener.gui.history_tab import HistoryTab
 from nse_screener.gui.sector_leadership_tab import SectorLeadershipTab
-from nse_screener.gui.sectors_tab import SectorsTab
+from nse_screener.gui.sector_ranks_tab import SectorRanksTab
 from nse_screener.gui.thresholds_tab import ThresholdsTab
 from nse_screener.gui.watchlist_tab import WatchlistTab
 from nse_screener.run_history import RunHistory, snapshot_stock
@@ -168,13 +168,15 @@ class ScreenerWindow(QMainWindow):
         self.watchlist_tab.run_requested.connect(self._run_on_symbols)
         self.tabs.addTab(self.watchlist_tab, "Watchlist")
 
-        # Seed the 6-month sector/subsector leaderboard both tabs use for medals.
-        reference = self.leadership_tab.reference()
-        self.history_tab.set_reference(reference)
-        self.watchlist_tab.set_reference(reference)
+        self.sector_ranks_tab = SectorRanksTab()
+        self.tabs.addTab(self.sector_ranks_tab, "Sector Ranks")
 
-        self.sectors_tab = SectorsTab()
-        self.tabs.addTab(self.sectors_tab, "Sectors")
+        # One leaderboard, computed on the Sector Ranks tab and shared with the two views
+        # that need medals and the trophy.
+        self.sector_ranks_tab.set_reference(self.leadership_tab.reference())
+        board = self.sector_ranks_tab.board()
+        self.history_tab.set_board(board)
+        self.watchlist_tab.set_board(board)
 
         self._build_tray()
 
@@ -488,6 +490,7 @@ class ScreenerWindow(QMainWindow):
         try:
             self._result = run_pipeline(
                 chartink_csv=self._input_path if self._input_mode() == INPUT_CSV else None,
+                sector_reference=self.leadership_tab.reference(),
                 hits=hits,
                 data_source=source,
                 progress=progress,
@@ -621,11 +624,7 @@ class ScreenerWindow(QMainWindow):
         Resolution is re-run here as well as after a screening run, because a refreshed
         reference export can classify stocks that were previously Unresolved.
         """
-        reference = self.leadership_tab.reference()
-        self.history_tab.set_reference(reference)
-        self.watchlist_tab.set_reference(reference)
-        self.history_tab.refresh()
-        self.watchlist_tab.refresh()
+        self.sector_ranks_tab.run_tests(self.leadership_tab.reference())
         if self._result is not None:
             self._resolve_classifications()
             self._render_table(self._toggles())
@@ -658,8 +657,7 @@ class ScreenerWindow(QMainWindow):
         self.summary.setText(summary_line(toggles))
         self._render_table(toggles)
         self._render_cards(toggles)
-        self.sectors_tab.refresh(self._ranked)
-
+    
     def _render_table_only(self) -> None:
         if self._result is not None:
             self._render_table(self._toggles())

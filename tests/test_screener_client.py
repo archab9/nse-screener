@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import pytest
 
-from nse_screener.stage2.params import classify_tailwind_sector
 from nse_screener.stage2.screener_client import (
     ScreenerParseError,
     blended_eps_cagr,
@@ -150,9 +149,9 @@ class TestIndustryChain:
     def test_orders_broad_to_specific_by_href_depth(self):
         assert parse_industry_chain(PAGE) == ["Industrials", "Capital Goods", "Aerospace & Defense"]
 
-    def test_chain_feeds_sector_classification(self):
-        chain = " > ".join(parse_industry_chain(PAGE))
-        assert classify_tailwind_sector(chain) == "Defense & strategic manufacturing"
+    def test_chain_is_joined_most_specific_last(self):
+        chain = parse_industry_chain(PAGE)
+        assert chain[-1] == "Aerospace & Defense"
 
 
 class TestGrowthTables:

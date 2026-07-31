@@ -1,6 +1,5 @@
 {
-  "_comment": "Screener.in 'Industry' is the canonical taxonomy (spec section 7). Matching is case-insensitive substring against that column. Refresh the tailwind list quarterly - spec section 3 calls it an explicit moving target.",
-
+  "_comment": "Screener.in 'Industry' is the canonical taxonomy. Matching is case-insensitive substring. The tailwind-sector list was removed when P8 became a peer rank.",
   "_p2_exceptions_note": "CONFIRMED-IN-CHAT: broad capital-intensive set gets the relaxed ROCE >=10% bar.",
   "capital_intensive_industries": [
     "infrastructure",
@@ -21,79 +20,6 @@
     "shipping",
     "ports"
   ],
-
-  "_tailwind_note": "Five sectors from spec section 3 P8. IT services deliberately excluded.",
-  "_tailwind_review": {
-    "last_reviewed": "2026-07-27",
-    "review_every_days": 90,
-    "_note": "This list is a human 3-year forward macro judgement, NOT something the app derives from live news. The app cannot forecast which sectors will lead; it only checks membership in this list plus a verifiable top-3-by-market-cap rank from Screener.in's own industry tables. Re-research quarterly and update both the list and last_reviewed."
-  },
-  "tailwind_rationale": {
-    "Private financials": "Credit-cycle upturn, GST-driven consumption, multiple brokerages overweight.",
-    "Defense & strategic manufacturing": "Strongest structural case of the five: ~32%/yr EPS growth forecast (Goldman Sachs, FY25-28), FY26 order approvals ~2x annual capex outlay. Valuations already rich - expect strong P8 but often weak P7, by design.",
-    "Renewable & clean energy value chain": "Policy-backed 500GW-by-2030 capacity target.",
-    "Capital goods & infrastructure": "Private capex flagged as a strong growth driver from late 2027 onward.",
-    "Consumption discretionary": "GST-rate-cut and income-tax-relief demand tailwind."
-  },
-  "excluded_rationale": {
-    "IT services": "Excluded despite appearing on some 2026 broker top-sector lists. Structural AI-driven repricing of the labour-intensive services model (Nifty IT down ~28% YTD 2026, revenue-hiring decoupling for the first time in the industry's history) outweighs the bull case for a 3-year structural pick."
-  },
-  "tailwind_sectors": {
-    "Private financials": [
-      "bank",
-      "private sector bank",
-      "nbfc",
-      "finance",
-      "housing finance",
-      "insurance",
-      "asset management"
-    ],
-    "Defense & strategic manufacturing": [
-      "defence",
-      "defense",
-      "aerospace",
-      "shipbuilding",
-      "explosives",
-      "ordnance"
-    ],
-    "Renewable & clean energy value chain": [
-      "renewable",
-      "solar",
-      "wind",
-      "battery",
-      "energy storage",
-      "power equipment",
-      "transmission",
-      "electrical equipment"
-    ],
-    "Capital goods & infrastructure": [
-      "capital goods",
-      "engineering",
-      "infrastructure",
-      "construction",
-      "cement",
-      "industrial machinery",
-      "abrasives"
-    ],
-    "Consumption discretionary": [
-      "auto",
-      "automobile",
-      "auto ancillary",
-      "consumer durables",
-      "appliances",
-      "retail",
-      "jewellery",
-      "footwear"
-    ]
-  },
-
-  "_excluded_note": "Excluded despite appearing on 2026 broker top-sector lists - structural AI repricing of labour-intensive services (spec section 3 P8).",
-  "excluded_sectors": [
-    "it services",
-    "software",
-    "information technology"
-  ],
-
   "_sector_index_note": "Maps Screener.in industry to the NSE sectoral index used for the P7 PB benchmark.",
   "nse_sector_index": {
     "bank": "NIFTY BANK",

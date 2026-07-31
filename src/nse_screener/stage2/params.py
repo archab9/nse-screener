@@ -504,94 +504,55 @@ def evaluate_p7(
 
 # --------------------------------------------------------------------------- P8
 
-def classify_tailwind_sector(industry: str) -> str | None:
-    """Map a Screener.in industry onto one of the five tailwind sectors, if any."""
-    smap = sector_map()
-    needle = (industry or "").lower()
-    if any(term in needle for term in smap["excluded_sectors"]):
-        return None
-    for sector, terms in smap["tailwind_sectors"].items():
-        if any(term in needle for term in terms):
-            return sector
-    return None
+def evaluate_p8(company: CompanyFundamentals, reference=None) -> ParamResult:
+    """Where this stock stands among its sector and subsector peers on ONE-YEAR share
+    price return. Reported separately, never scored (spec section 4).
 
+    Replaces the old tailwind / top-3 flag, which said nothing about the great majority of
+    stocks. This gives the actual position: "#17 of 42" is an answer, "not top 3" was not.
 
-def evaluate_p8(
-    company: CompanyFundamentals, industry_peers: list[CompanyFundamentals] | None = None
-) -> ParamResult:
-    """Sector tailwind. Reported separately - never contributes points (spec section 4).
-
-    "Sector leader" is top-3 by market cap within the industry. That ranking is only as
-    good as the universe present in the export: if only the stage-1 shortlist was
-    exported, the peer set is not the full industry and the check is flagged as
-    provisional rather than silently returning a wrong answer.
+    Peers come from the bulk sector reference export, the only dataset here covering the
+    whole market. Companies not reporting a one-year return leave the denominator rather
+    than counting as last.
     """
-    sector = classify_tailwind_sector(_classification_of(company))
-    if sector is None:
-        return ParamResult(
-            "P8",
-            Verdict.NO,
-            f"Industry '{company.industry or 'unknown'}' is not in the five tailwind sectors.",
-            {"Industry": company.classification_text or company.industry},
+    from ..peer_ranking import rank_symbol
+
+    ranking = rank_symbol(reference, company.symbol)
+    metric = ranking.metric("return_1y")
+
+    if metric is None or not (metric.subsector.known or metric.sector.known):
+        return _unknown(
+            "P8", "Not found in the sector reference export, so no peer rank is possible."
         )
 
-    flags: list[Flag] = []
-    rank = company.industry_rank
-    peer_count = company.industry_peer_count
-    provisional = False
-
-    if rank is None:
-        # No authoritative industry table - fall back to whatever peers were loaded,
-        # and say so rather than presenting a shortlist rank as an industry rank.
-        peers = industry_peers or []
-        if peers and company.market_cap_cr:
-            ranked = sorted(
-                (p for p in peers if p.market_cap_cr),
-                key=lambda p: p.market_cap_cr or 0,
-                reverse=True,
-            )
-            for i, peer in enumerate(ranked, start=1):
-                if peer.symbol == company.symbol:
-                    rank = i
-                    break
-            peer_count = len(ranked)
-            provisional = True
-            flags.append(
-                Flag(
-                    "P8",
-                    "partial_peer_universe",
-                    f"Rank computed against {len(ranked)} loaded peers, not the full "
-                    f"industry - treat as provisional",
-                    "info",
-                )
-            )
-
-    is_leader = rank is not None and rank <= 3
+    sub, sec = metric.subsector, metric.sector
+    value = sub.value if sub.value is not None else sec.value
     evidence = {
-        "Tailwind sector": sector,
-        "Industry": company.industry,
-        "Market cap (cr)": company.market_cap_cr,
-        "Rank by market cap": rank,
-        "Companies in industry": peer_count,
-        "Rank source": "Screener.in industry table" if not provisional else "loaded peers only",
+        "1-year price return %": round(value, 1) if value is not None else None,
+        "Subsector": ranking.subsector or "unknown",
+        "Rank in subsector": sub.display,
+        "Sector": ranking.sector or "unknown",
+        "Rank in sector": sec.display,
     }
 
-    if is_leader:
-        of = f" of {peer_count}" if peer_count else ""
-        return ParamResult(
-            "P8", Verdict.YES, f"{sector} - ranks #{rank}{of} by market cap.", evidence, flags
-        )
-    if rank is None:
-        return ParamResult(
-            "P8",
-            Verdict.PARTIAL,
-            f"In {sector} but sector-leader rank could not be established.",
-            evidence,
-            flags,
-        )
-    return ParamResult(
-        "P8", Verdict.NO, f"In {sector} but ranks #{rank} by market cap (not top-3).", evidence, flags
+    cfg = settings().get("p8_peer_rank", {})
+    percentile = sub.percentile if sub.percentile is not None else sec.percentile
+    if percentile is None:
+        verdict = Verdict.PARTIAL
+    elif percentile <= cfg.get("top_band_pct", 25.0):
+        verdict = Verdict.YES
+    elif percentile <= cfg.get("mid_band_pct", 50.0):
+        verdict = Verdict.PARTIAL
+    else:
+        verdict = Verdict.NO
+
+    where = " and ".join(
+        part for part in (
+            f"#{sub.rank} of {sub.total} in {ranking.subsector}" if sub.known else "",
+            f"#{sec.rank} of {sec.total} in {ranking.sector}" if sec.known else "",
+        ) if part
     )
+    return ParamResult("P8", verdict, f"1-year price return ranks {where}.", evidence, [])
 
 
 EVALUATORS = {

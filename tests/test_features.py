@@ -8,8 +8,6 @@ import json
 import pytest
 
 from nse_screener import config
-from nse_screener.models import ParamResult, ScoredStock, Verdict
-from nse_screener.sectors import build_sector_views, is_sector_leader, review_status
 from nse_screener.stage1.symbols import hits_from_text, load_symbol_file, parse_symbols
 from nse_screener.stage2.screener_client import parse_concall_links, parse_industry_table
 from nse_screener.thresholds import build_overrides, default_value, validate
@@ -196,59 +194,6 @@ class TestSymbolParsing:
         hits, rejected = load_symbol_file(path)
         assert [h.symbol for h in hits] == ["HAL", "BEL", "RELIANCE"]
         assert rejected == []
-
-
-# ------------------------------------------------------------------- sectors
-
-def make_stock(symbol: str, sector: str, rank: int | None) -> ScoredStock:
-    verdict = Verdict.YES if (rank is not None and rank <= 3) else Verdict.NO
-    result = ParamResult(
-        "P8",
-        verdict,
-        "",
-        {"Tailwind sector": sector, "Rank by market cap": rank, "Companies in industry": 25},
-    )
-    stock = ScoredStock(symbol=symbol, name=symbol, results={"P8": result})
-    stock.tailwind_sector = sector
-    stock.sector_tailwind = verdict is Verdict.YES
-    return stock
-
-
-class TestSectorViews:
-    def test_leader_requires_both_sector_and_top3(self):
-        leader = make_stock("HAL", "Defense & strategic manufacturing", 1)
-        laggard = make_stock("XYZ", "Defense & strategic manufacturing", 9)
-        assert is_sector_leader(leader) is True
-        assert is_sector_leader(laggard) is False
-
-    def test_views_split_leaders_from_plain_members(self):
-        stocks = [
-            make_stock("HAL", "Defense & strategic manufacturing", 1),
-            make_stock("XYZ", "Defense & strategic manufacturing", 9),
-        ]
-        views = {v.name: v for v in build_sector_views(stocks)}
-        defence = views["Defense & strategic manufacturing"]
-        assert defence.leaders == ["HAL"]
-        assert set(defence.matched) == {"HAL", "XYZ"}
-
-    def test_every_configured_sector_gets_a_view_with_rationale(self):
-        views = build_sector_views([])
-        assert len(views) == 5
-        assert all(v.rationale for v in views), "each sector needs its reasoning shown"
-
-    def test_review_status_flags_a_stale_list(self, monkeypatch):
-        from datetime import date
-
-        message, stale = review_status(today=date(2030, 1, 1))
-        assert stale is True
-        assert "Overdue" in message
-
-    def test_review_status_fresh(self):
-        from datetime import date
-
-        message, stale = review_status(today=date(2026, 7, 28))
-        assert stale is False
-        assert "last reviewed" in message
 
 
 # --------------------------------------------- industry ranking and concalls

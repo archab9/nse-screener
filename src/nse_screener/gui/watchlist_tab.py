@@ -33,9 +33,9 @@ from nse_screener.watchlist import Watchlist, WatchState
 
 COLUMNS = [
     "Symbol", "Cap", "Params hit", "Parameters", "Score", "Tier",
-    "Subsector (6m rank)", "Peer rank", "Biggest positive", "Note", "Added",
+    "Peer rank", "Biggest positive", "Note", "Added",
 ]
-COL_NOTE = 9
+COL_NOTE = 8
 LEADER_BG = QColor("#c8e6c9")
 
 
@@ -154,18 +154,27 @@ class WatchlistTab(QWidget):
             key=lambda r: (r[1] is None, sort_key(r[1]) if r[1] else (0, 0, 0, r[0])),
         )
 
+    def set_board(self, board: Leaderboards) -> None:
+        """Take the leaderboard computed on the Sector Ranks tab.
+
+        Medals and the trophy depend on it, but the full sector table now lives on its own
+        tab, so this view only needs the result - not its own copy of the calculation.
+        """
+        self._board = board
+        self.board_label.setText(board.summary())
+        self.board_label.setVisible(board.available)
+        self.refresh()
+
     def set_reference(self, reference) -> None:
-        """Recompute the 6-month sector/subsector leaderboard from the bulk export."""
-        self._board = build_leaderboards(reference)
-        self.board_label.setText(self._board.summary())
-        self.board_label.setVisible(self._board.available)
+        self.set_board(build_leaderboards(reference))
 
     def run_sector_tests(self, reference=None) -> None:
         window = self.window()
-        if reference is None and hasattr(window, "leadership_tab"):
-            reference = window.leadership_tab.reference()
-        self.set_reference(reference)
-        self.refresh()
+        ranks = getattr(window, "sector_ranks_tab", None)
+        if ranks is not None:
+            ranks.run_tests(reference)
+        else:
+            self.set_reference(reference)
 
     # ---------------------------------------------------------------- rendering
 
@@ -184,7 +193,6 @@ class WatchlistTab(QWidget):
                 parameter_badges(snap.verdicts, snap.active_toggles) if snap else "-",
                 snap.score_display if snap else "-",
                 snap.tier if snap else "-",
-                (self._board.label("subsector", snap.peer_subsector) if snap else "") or "-",
                 (snap.peer_summary if snap else "") or "-",
                 (snap.headline_positive if snap else "") or "-",
                 entry.note if entry else "",

@@ -60,6 +60,12 @@
     "micro_cap_cr": 500
   },
 
+  "p8_peer_rank": {
+    "_note": "P8 reports where a stock stands among sector and subsector peers on 1-year price return. Never scored - the bands only colour the badge; the exact rank is in the detail.",
+    "top_band_pct": 25.0,
+    "mid_band_pct": 50.0
+  },
+
   "leaderboard": {
     "_note": "Sectors and subsectors ranked by MEDIAN 6-month share price return of their constituents. Median resists one multi-bagger carrying a flat sector. Groups below min_constituents are excluded rather than allowed to win on a handful of names.",
     "min_constituents": 5

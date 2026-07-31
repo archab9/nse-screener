@@ -33,7 +33,7 @@ from nse_screener.run_history import RunHistory, StockSnapshot, sort_key
 
 COLUMNS = [
     "Ticker", "Cap", "Params hit", "Parameters", "Score", "Tier",
-    "Subsector (6m rank)", "Peer rank", "Biggest positive", "Runs", "Last seen",
+    "Peer rank", "Biggest positive", "Runs", "Last seen",
 ]
 
 ALL_RUNS = "__all__"
@@ -140,18 +140,27 @@ class HistoryTab(QWidget):
         run = self._history.run_by_id(selected)
         return sorted(run.stocks, key=sort_key) if run else []
 
+    def set_board(self, board: Leaderboards) -> None:
+        """Take the leaderboard computed on the Sector Ranks tab.
+
+        Medals and the trophy depend on it, but the full sector table now lives on its own
+        tab, so this view only needs the result - not its own copy of the calculation.
+        """
+        self._board = board
+        self.board_label.setText(board.summary())
+        self.board_label.setVisible(board.available)
+        self.refresh()
+
     def set_reference(self, reference) -> None:
-        """Recompute the 6-month sector/subsector leaderboard from the bulk export."""
-        self._board = build_leaderboards(reference)
-        self.board_label.setText(self._board.summary())
-        self.board_label.setVisible(self._board.available)
+        self.set_board(build_leaderboards(reference))
 
     def run_sector_tests(self, reference=None) -> None:
         window = self.window()
-        if reference is None and hasattr(window, "leadership_tab"):
-            reference = window.leadership_tab.reference()
-        self.set_reference(reference)
-        self.refresh()
+        ranks = getattr(window, "sector_ranks_tab", None)
+        if ranks is not None:
+            ranks.run_tests(reference)
+        else:
+            self.set_reference(reference)
 
     # ---------------------------------------------------------------- rendering
 
@@ -170,7 +179,6 @@ class HistoryTab(QWidget):
                 parameter_badges(snap.verdicts, snap.active_toggles),
                 snap.score_display,
                 snap.tier,
-                self._board.label("subsector", snap.peer_subsector) or "-",
                 snap.peer_summary or "-",
                 snap.headline_positive or "-",
                 str(len(history)),

@@ -67,6 +67,7 @@ class PipelineResult:
         self.store = store
         self.hits = hits or []
         self.sector_valuations = sector_valuations or {}
+        self.sector_reference = None
 
 
 def reevaluate(result: PipelineResult) -> list[ScoredStock]:
@@ -84,13 +85,15 @@ def reevaluate(result: PipelineResult) -> list[ScoredStock]:
         company = result.store.get(hit.symbol)
         if company is None:
             continue
-        stocks.append(_evaluate(company, hit, result.store, result.sector_valuations))
+        stocks.append(_evaluate(company, hit, result.store, result.sector_valuations,
+                                result.sector_reference))
     result.stocks = stocks
     return stocks
 
 
 def run_pipeline(
     chartink_csv: Path | str | None = None,
+    sector_reference=None,
     data_source: str | None = None,
     progress: ProgressFn | None = None,
     today: date | None = None,
@@ -190,7 +193,7 @@ def run_pipeline(
         if company is None:
             missing.append(hit.symbol)
             continue
-        stocks.append(_evaluate(company, hit, store, sector_valuations))
+        stocks.append(_evaluate(company, hit, store, sector_valuations, sector_reference))
 
     if missing:
         context.warn(
@@ -213,7 +216,10 @@ def run_pipeline(
             context.warn("kite_quotes", f"Live quote check skipped: {exc}", severity="warning")
 
     report("Done.", 100)
-    return PipelineResult(stocks, context, store=store, hits=hits, sector_valuations=sector_valuations)
+    result = PipelineResult(stocks, context, store=store, hits=hits,
+                            sector_valuations=sector_valuations)
+    result.sector_reference = sector_reference
+    return result
 
 
 def _load_live(
@@ -318,13 +324,8 @@ def _evaluate(
     hit: Stage1Hit,
     store: FundamentalsStore,
     sector_valuations: dict[str, dict[str, float]],
+    sector_reference=None,
 ) -> ScoredStock:
-    peers = [
-        c
-        for c in store.companies.values()
-        if c.industry and c.industry.strip().lower() == (company.industry or "").strip().lower()
-    ]
-
     results = {
         "P1": evaluate_p1(company),
         "P2": evaluate_p2(company),
@@ -333,7 +334,7 @@ def _evaluate(
         "P5": evaluate_p5(company),
         "P6": evaluate_p6(company),
         "P7": evaluate_p7(company, sector_valuations),
-        "P8": evaluate_p8(company, peers),
+        "P8": evaluate_p8(company, sector_reference),
     }
 
     p7 = results["P7"]
@@ -347,5 +348,5 @@ def _evaluate(
         pb=company.pb,
     )
     stock.sector_tailwind = results["P8"].verdict.name == "YES"
-    stock.tailwind_sector = str(results["P8"].evidence.get("Tailwind sector") or "")
+    stock.tailwind_sector = str(results["P8"].evidence.get("Subsector") or "")
     return stock

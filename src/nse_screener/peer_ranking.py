@@ -130,7 +130,9 @@ def _rank_in(rows: list[CompanyRow], symbol: str, attribute: str) -> Rank:
 def rank_symbol(reference: SectorReference | None, symbol: str) -> PeerRanking:
     symbol = normalise_symbol(symbol)
     ranking = PeerRanking(symbol=symbol)
-    if reference is None:
+    # P8 previously took a plain peer list. Anything that is not a SectorReference degrades
+    # to "no ranking" rather than raising - a stale caller must not take a whole run down.
+    if reference is None or not hasattr(reference, "lookup"):
         return ranking
 
     row = reference.lookup(symbol)
