@@ -1,0 +1,954 @@
+"""Windows desktop app.
+
+Design constraints carried through from the build spec:
+  - A single "Generate Results" button is the ONLY trigger. No scheduler, no timer, no
+    background runner.
+  - The pipeline runs synchronously on that press, with a progress indicator.
+  - Each of P1-P7 has its own checkbox, all ON by default. P8 gets a separate toggle,
+    since it was never part of the score.
+  - Toggling recomputes and re-renders immediately, without re-running the pipeline.
+  - Banners are never suppressed: stale fundamentals, missing credentials, fetch failures.
+
+Two kinds of live update, which are not the same thing:
+  - toggling a parameter only changes the arithmetic  -> re-score
+  - changing a threshold changes the verdicts         -> re-evaluate against cached data
+Neither ever re-fetches.
+"""
+
+from __future__ import annotations
+
+import sys
+import webbrowser
+from pathlib import Path
+
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QAction, QColor, QFont, QIcon, QPainter, QPixmap
+from PyQt6.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QFileDialog,
+    QGroupBox,
+    QHBoxLayout,
+    QInputDialog,
+    QLabel,
+    QMainWindow,
+    QMenu,
+    QMessageBox,
+    QPlainTextEdit,
+    QProgressBar,
+    QPushButton,
+    QScrollArea,
+    QSplitter,
+    QSystemTrayIcon,
+    QTableWidget,
+    QTableWidgetItem,
+    QTabWidget,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from nse_screener.classification import ClassificationStore, Source, rank_within_industry
+from nse_screener.concall import extract_takeaways
+from nse_screener.config import resolve_path
+from nse_screener.display import (
+    BADGE_LEGEND,
+    format_snapshot_detail,
+    headline_positive,
+    parameter_badges,
+)
+from nse_screener.peer_ranking import cap_category, rank_symbol
+from nse_screener.gui.kite_dialog import KiteSettingsDialog
+from nse_screener.gui.login_dialog import ScreenerLoginDialog
+from nse_screener.gui import theme
+from nse_screener.gui.history_tab import HistoryTab
+from nse_screener.gui.sector_leadership_tab import SectorLeadershipTab
+from nse_screener.gui.sector_ranks_tab import SectorRanksTab
+from nse_screener.gui.thresholds_tab import ThresholdsTab
+from nse_screener.gui.watchlist_tab import WatchlistTab
+from nse_screener.run_history import RunHistory, snapshot_stock
+from nse_screener.sector_history import SectorHistory
+from nse_screener.sector_universe import load_sector_universe
+from nse_screener.market.kite import TokenState, build_login_url, check_token, complete_login
+from nse_screener.models import P8_ID, PARAM_IDS, PARAM_NAMES, RunContext, ScoredStock, Tier
+from nse_screener.pipeline import LIVE, LOCAL, PipelineResult, reevaluate, run_pipeline
+from nse_screener.report import format_detail_card
+from nse_screener.scoring import score_all, summary_line
+from nse_screener.stage1.symbols import hits_from_text, load_symbol_file
+from nse_screener.stage2.screener_client import has_credentials
+from nse_screener.watchlist import Watchlist, WatchState
+
+TIER_COLOURS = {tier: theme.TIER_TEXT[tier.value] for tier in Tier}
+
+SEVERITY_STYLE = theme.BANNER
+
+LEADER_BG, LEADER_FG = theme.LEADER_BG, theme.LEADER_FG
+UNRESOLVED_BG, UNRESOLVED_FG = theme.UNRESOLVED_BG, theme.UNRESOLVED_FG
+
+COLUMNS = [
+    "Ticker", "Cap", "Industry", "Params hit", "Parameters", "Score", "Tier",
+    "Peer rank", "Watchlist", "Biggest positive", "Concall +/-", "Key flags",
+]
+COL_CAP, COL_INDUSTRY, COL_HIT, COL_BADGES, COL_TIER = 1, 2, 3, 4, 6
+COL_LEADER, COL_WATCH, COL_POSITIVE, COL_DESC = 7, 8, 9, 10
+
+INPUT_CSV, INPUT_TXT, INPUT_MANUAL = "csv", "txt", "manual"
+
+
+def _is_top(ranking) -> bool:
+    """Top quartile of its subsector on the primary metric - a band wide enough to be
+    informative, unlike the old top-3 flag which was empty for nearly every stock."""
+    from nse_screener.peer_ranking import PRIMARY_METRIC
+
+    metric = ranking.metric(PRIMARY_METRIC)
+    if metric is None:
+        return False
+    pct = metric.subsector.percentile
+    return pct is not None and pct <= 25.0
+
+
+def _make_icon() -> QIcon:
+    pixmap = QPixmap(64, 64)
+    pixmap.fill(QColor("#1b5e20"))
+    painter = QPainter(pixmap)
+    painter.setPen(QColor("white"))
+    painter.setFont(QFont("Segoe UI", 30, QFont.Weight.Bold))
+    painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "S")
+    painter.end()
+    return QIcon(pixmap)
+
+
+class ScreenerWindow(QMainWindow):
+    def __init__(self) -> None:
+        super().__init__()
+        self.setWindowTitle("NSE Two-Stage Screener")
+        self.resize(1500, 950)
+
+        # Applied here rather than only in main(), so any entry point gets it. Several
+        # cells paint their own background; against the default light palette those sat
+        # behind light text and were unreadable.
+        app = QApplication.instance()
+        if app is not None:
+            theme.apply(app)
+
+        self._result: PipelineResult | None = None
+        self._ranked: list[ScoredStock] = []
+        self._checkboxes: dict[str, QCheckBox] = {}
+        self._input_path: Path | None = None
+        self._watchlist = Watchlist.load()
+        self._history = SectorHistory.load()
+        self._classification = ClassificationStore.load()
+        self._runs = RunHistory.load()
+        # The NSE classification: what sectors and subsectors EXIST, independent of
+        # whatever the bulk export happens to price.
+        try:
+            self._universe = load_sector_universe()
+        except Exception:
+            self._universe = None
+
+        self.tabs = QTabWidget()
+        self.setCentralWidget(self.tabs)
+
+        self.tabs.addTab(self._build_screener_tab(), "Screener")
+
+        self.history_tab = HistoryTab(self._runs)
+        self.tabs.addTab(self.history_tab, "History")
+
+        self.leadership_tab = SectorLeadershipTab(self._history)
+        self.leadership_tab.changed.connect(self._on_leadership_changed)
+        self.tabs.addTab(self.leadership_tab, "Sector Leadership")
+
+        self.thresholds_tab = ThresholdsTab()
+        self.thresholds_tab.changed.connect(self._on_thresholds_changed)
+        self.tabs.addTab(self.thresholds_tab, "Thresholds")
+
+        self.watchlist_tab = WatchlistTab(self._watchlist, self._runs)
+        self.watchlist_tab.changed.connect(self._render_table_only)
+        self.watchlist_tab.run_requested.connect(self._run_on_symbols)
+        self.tabs.addTab(self.watchlist_tab, "Watchlist")
+
+        self.sector_ranks_tab = SectorRanksTab()
+        self.tabs.addTab(self.sector_ranks_tab, "Sector Ranks")
+
+        # One leaderboard, computed on the Sector Ranks tab and shared with the two views
+        # that need medals and the trophy.
+        self.sector_ranks_tab.set_universe(self._universe)
+        self.sector_ranks_tab.set_reference(self.leadership_tab.reference())
+        board = self.sector_ranks_tab.board()
+        self.history_tab.set_board(board)
+        self.watchlist_tab.set_board(board)
+
+        self._build_tray()
+
+    # ------------------------------------------------------------------ screener tab
+
+    def _build_screener_tab(self) -> QWidget:
+        root = QWidget()
+        layout = QVBoxLayout(root)
+
+        layout.addWidget(self._build_sources())
+        layout.addWidget(self._build_controls())
+
+        self.banner_box = QVBoxLayout()
+        self.banner_box.setSpacing(4)
+        layout.addLayout(self.banner_box)
+
+        # Dedicated label, NOT part of the banner stack. It is refreshed on every table
+        # render, including toggles, which do not clear banners - appending there stacked
+        # a fresh copy on every checkbox click.
+        self.unresolved_label = QLabel()
+        self.unresolved_label.setWordWrap(True)
+        self.unresolved_label.setVisible(False)
+        self.unresolved_label.setStyleSheet(SEVERITY_STYLE["warning"])
+        layout.addWidget(self.unresolved_label)
+
+        self.progress = QProgressBar()
+        self.progress.setVisible(False)
+        layout.addWidget(self.progress)
+
+        self.status = QLabel("Choose an input, then press Generate Results.")
+        self.status.setStyleSheet(theme.MUTED_LABEL)
+        layout.addWidget(self.status)
+
+        self.summary = QLabel(summary_line(self._toggles()))
+        self.summary.setStyleSheet("font-weight:bold; padding:2px;")
+        layout.addWidget(self.summary)
+
+        self.legend = QLabel(
+            "Green row = top-quartile peer rank in its subsector.   " + BADGE_LEGEND
+        )
+        self.legend.setWordWrap(True)
+        self.legend.setStyleSheet(theme.HINT_LABEL)
+        layout.addWidget(self.legend)
+
+        splitter = QSplitter(Qt.Orientation.Vertical)
+        self.table = QTableWidget(0, len(COLUMNS))
+        self.table.setHorizontalHeaderLabels(COLUMNS)
+        self.table.setAlternatingRowColors(True)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        # Concall takeaways run to 5 positive + 3 negative pointers, so the description
+        # cell needs real width and wrapping, and rows must size to their content rather
+        # than clipping to a single line.
+        self.table.setWordWrap(True)
+        self.table.setColumnWidth(COL_CAP, 80)
+        self.table.setColumnWidth(COL_INDUSTRY, 150)
+        self.table.setColumnWidth(COL_BADGES, 190)
+        self.table.setColumnWidth(COL_TIER, 140)
+        self.table.setColumnWidth(COL_LEADER, 215)
+        self.table.setColumnWidth(COL_POSITIVE, 260)
+        self.table.setColumnWidth(COL_DESC, 430)
+        self.table.verticalHeader().setDefaultAlignment(
+            Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight
+        )
+        self.table.itemSelectionChanged.connect(self._on_row_selected)
+        self.table.cellDoubleClicked.connect(self._on_cell_double_clicked)
+        splitter.addWidget(self.table)
+
+        self.cards = QTextEdit()
+        self.cards.setReadOnly(True)
+        self.cards.setFont(QFont("Consolas", 9))
+        area = QScrollArea()
+        area.setWidgetResizable(True)
+        area.setWidget(self.cards)
+        splitter.addWidget(area)
+        splitter.setSizes([430, 470])
+        layout.addWidget(splitter, stretch=1)
+        return root
+
+    def _build_sources(self) -> QWidget:
+        box = QGroupBox("Data sources")
+        outer = QVBoxLayout(box)
+
+        row1 = QHBoxLayout()
+        row1.addWidget(QLabel("Stage 1 input:"))
+        self.input_combo = QComboBox()
+        self.input_combo.addItem("Chartink CSV export", INPUT_CSV)
+        self.input_combo.addItem("Text file (one symbol per line)", INPUT_TXT)
+        self.input_combo.addItem("Type or paste symbols", INPUT_MANUAL)
+        self.input_combo.currentIndexChanged.connect(self._on_input_mode)
+        row1.addWidget(self.input_combo)
+
+        self.browse_button = QPushButton("Choose file...")
+        self.browse_button.clicked.connect(self._choose_file)
+        row1.addWidget(self.browse_button)
+
+        self.input_label = QLabel()
+        self.input_label.setStyleSheet(theme.MUTED_LABEL)
+        row1.addWidget(self.input_label, stretch=1)
+        outer.addLayout(row1)
+
+        self.manual_box = QPlainTextEdit()
+        self.manual_box.setPlaceholderText(
+            "RELIANCE, HAL, BEL\nor one symbol per line - commas, spaces and newlines all work"
+        )
+        self.manual_box.setMaximumHeight(70)
+        self.manual_box.setVisible(False)
+        outer.addWidget(self.manual_box)
+
+        row2 = QHBoxLayout()
+        row2.addWidget(QLabel("Stage 2 fundamentals:"))
+        self.source_combo = QComboBox()
+        self.source_combo.addItem("Live from Screener.in (Premium login)", LIVE)
+        self.source_combo.addItem("Saved local export", LOCAL)
+        self.source_combo.currentIndexChanged.connect(self._refresh_source_label)
+        row2.addWidget(self.source_combo)
+
+        self.login_button = QPushButton("Screener.in login...")
+        self.login_button.clicked.connect(self._screener_login)
+        row2.addWidget(self.login_button)
+
+        kite_button = QPushButton("Kite API...")
+        kite_button.clicked.connect(self._kite_settings)
+        row2.addWidget(kite_button)
+
+        self.login_label = QLabel()
+        self.login_label.setStyleSheet(theme.MUTED_LABEL)
+        row2.addWidget(self.login_label, stretch=1)
+        outer.addLayout(row2)
+
+        try:
+            default_csv = resolve_path("chartink_csv")
+            if default_csv.exists():
+                self._input_path = default_csv
+        except (KeyError, OSError):
+            pass
+
+        self._refresh_source_label()
+        return box
+
+    def _build_controls(self) -> QWidget:
+        box = QGroupBox(
+            "Parameters - toggling removes a parameter from the score AND the denominator"
+        )
+        outer = QVBoxLayout(box)
+
+        checks = QHBoxLayout()
+        for pid in PARAM_IDS:
+            cb = QCheckBox(f"{pid}  {PARAM_NAMES[pid]}")
+            cb.setChecked(True)
+            cb.stateChanged.connect(self._on_toggle)
+            self._checkboxes[pid] = cb
+            checks.addWidget(cb)
+        outer.addLayout(checks)
+
+        row = QHBoxLayout()
+        p8 = QCheckBox(f"{P8_ID}  {PARAM_NAMES[P8_ID]} (reported separately, never scored)")
+        p8.setChecked(True)
+        p8.stateChanged.connect(self._on_toggle)
+        self._checkboxes[P8_ID] = p8
+        row.addWidget(p8)
+
+        # Sector leadership is an optional overlay, same standing as P8: off means the
+        # Industry column, the Unresolved marking and the green highlight all disappear,
+        # and no breadth evaluation is applied to the table at all.
+        self.sector_overlay = QCheckBox("Peer ranking overlay (optional, never scored)")
+        self.sector_overlay.setChecked(True)
+        self.sector_overlay.setToolTip(
+            "Off: no Industry column, no leadership highlighting, no unresolved marking.\n"
+            "The Sector Leadership tab stays available for reviewing breadth on its own."
+        )
+        self.sector_overlay.stateChanged.connect(self._on_overlay_toggle)
+        row.addWidget(self.sector_overlay)
+        row.addStretch()
+
+        self.run_button = QPushButton("Generate Results")
+        self.run_button.setMinimumHeight(38)
+        self.run_button.setMinimumWidth(190)
+        self.run_button.setStyleSheet(
+            "QPushButton { background:#1b5e20; color:white; font-weight:bold; border-radius:4px; }"
+            "QPushButton:hover { background:#2e7d32; }"
+            "QPushButton:disabled { background:#9e9e9e; }"
+        )
+        self.run_button.clicked.connect(self.generate)
+        row.addWidget(self.run_button)
+        outer.addLayout(row)
+        return box
+
+    def _build_tray(self) -> None:
+        self.tray = QSystemTrayIcon(_make_icon(), self)
+        self.tray.setToolTip("NSE Two-Stage Screener")
+        menu = QMenu()
+        show = QAction("Show window", self)
+        show.triggered.connect(self.showNormal)
+        run = QAction("Generate Results", self)
+        run.triggered.connect(self.generate)
+        quit_action = QAction("Quit", self)
+        quit_action.triggered.connect(QApplication.quit)
+        menu.addAction(show)
+        menu.addAction(run)
+        menu.addSeparator()
+        menu.addAction(quit_action)
+        self.tray.setContextMenu(menu)
+        self.tray.activated.connect(
+            lambda reason: self.showNormal()
+            if reason == QSystemTrayIcon.ActivationReason.Trigger
+            else None
+        )
+        self.tray.show()
+        self.setWindowIcon(_make_icon())
+
+    # ------------------------------------------------------------------- state
+
+    def _toggles(self) -> dict[str, bool]:
+        return {pid: cb.isChecked() for pid, cb in self._checkboxes.items() if pid in PARAM_IDS}
+
+    def _show_p8(self) -> bool:
+        cb = self._checkboxes.get(P8_ID)
+        return cb.isChecked() if cb else True
+
+    def _sector_overlay_on(self) -> bool:
+        return getattr(self, "sector_overlay", None) is None or self.sector_overlay.isChecked()
+
+    def _on_overlay_toggle(self) -> None:
+        """Overlay on/off only affects presentation - no re-score, no re-fetch."""
+        self.legend.setVisible(self._sector_overlay_on())
+        if self._result is not None:
+            self._render_table(self._toggles())
+
+    def _input_mode(self) -> str:
+        return self.input_combo.currentData()
+
+    def _on_input_mode(self) -> None:
+        mode = self._input_mode()
+        self.manual_box.setVisible(mode == INPUT_MANUAL)
+        self.browse_button.setVisible(mode != INPUT_MANUAL)
+        self._refresh_source_label()
+
+    def _choose_file(self) -> None:
+        mode = self._input_mode()
+        start = str(self._input_path.parent) if self._input_path else ""
+        if mode == INPUT_CSV:
+            caption, filters = "Select the Chartink scan export", "CSV files (*.csv);;All files (*)"
+        else:
+            caption, filters = "Select a symbol list", "Text files (*.txt);;All files (*)"
+        path, _ = QFileDialog.getOpenFileName(self, caption, start, filters)
+        if path:
+            self._input_path = Path(path)
+            self._refresh_source_label()
+
+    def _screener_login(self) -> None:
+        if ScreenerLoginDialog(self).exec():
+            self._refresh_source_label()
+
+    def _kite_settings(self) -> None:
+        KiteSettingsDialog(self).exec()
+        self._refresh_source_label()
+
+    def _refresh_source_label(self) -> None:
+        mode = self._input_mode()
+        if mode == INPUT_MANUAL:
+            self.input_label.setText("typed symbols")
+        else:
+            self.input_label.setText(
+                self._input_path.name if self._input_path else "no file selected"
+            )
+
+        live = self.source_combo.currentData() == LIVE
+        self.login_button.setEnabled(live)
+        if not live:
+            self.login_label.setText("reading a saved export from disk")
+        elif has_credentials():
+            self.login_label.setText("Screener.in credentials stored")
+        else:
+            self.login_label.setText("no Screener.in credentials stored")
+
+    # ------------------------------------------------------------------ actions
+
+    def generate(self, exclude_removed: bool = True) -> None:
+        """The single trigger. Runs the whole pipeline synchronously."""
+        hits, error = self._collect_hits()
+        if error:
+            QMessageBox.warning(self, "Stage 1 input", error)
+            return
+
+        source = self.source_combo.currentData()
+        if source == LIVE and not has_credentials():
+            answer = QMessageBox.question(
+                self,
+                "Screener.in login needed",
+                "Live mode needs your Screener.in credentials. Sign in now?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if answer == QMessageBox.StandardButton.Yes:
+                self._screener_login()
+            if not has_credentials():
+                return
+
+        if not self._ensure_kite_token():
+            return
+
+        self.run_button.setEnabled(False)
+        self.progress.setVisible(True)
+        self.progress.setValue(0)
+        self._clear_banners()
+
+        def progress(message: str, pct: int) -> None:
+            self.status.setText(message)
+            self.progress.setValue(pct)
+            QApplication.processEvents()
+
+        try:
+            self._result = run_pipeline(
+                chartink_csv=self._input_path if self._input_mode() == INPUT_CSV else None,
+                sector_reference=self.leadership_tab.reference(),
+                hits=hits,
+                data_source=source,
+                progress=progress,
+                exclude_symbols=self._watchlist.removed_symbols() if exclude_removed else None,
+            )
+        except Exception as exc:
+            self._add_banner("error", f"Pipeline failed: {exc}")
+            self.status.setText("Run failed.")
+            return
+        finally:
+            self.run_button.setEnabled(True)
+            self.progress.setVisible(False)
+
+        self._render()
+        self._record_run(source)
+
+    def _record_run(self, source: str) -> None:
+        """Append this run to the rolling history. Never let a save failure lose the run
+        that was just computed - the results on screen are still valid."""
+        if self._result is None or not self._ranked:
+            return
+        try:
+            self._runs.record(
+                self._ranked,
+                self._toggles(),
+                stage1_count=self._result.context.stage1_count,
+                data_source=source,
+                store=self._result.store,
+                reference=self.leadership_tab.reference(),
+            )
+            self._runs.save()
+            self.history_tab.refresh()
+        except OSError as exc:
+            self._add_banner("warning", f"Run computed but not saved to history: {exc}")
+
+    def _run_on_symbols(self, symbols: list[str]) -> None:
+        """Screen an explicit symbol list - used by 'Run filter on entire watchlist'.
+
+        Switches the Screener tab to typed-symbol input and runs it, so the result lands
+        in the same table, the same detail cards and the same run history as any other
+        run. Watchlist stocks are not filtered out even if marked removed elsewhere -
+        being on the watchlist is the more recent, more deliberate signal.
+        """
+        if not symbols:
+            return
+        self.input_combo.setCurrentIndex(
+            next(i for i in range(self.input_combo.count())
+                 if self.input_combo.itemData(i) == INPUT_MANUAL)
+        )
+        self.manual_box.setPlainText(" ".join(symbols))
+        self.tabs.setCurrentIndex(0)
+        self.generate(exclude_removed=False)
+
+    def _collect_hits(self) -> tuple[list | None, str]:
+        """Resolve the stage-1 list. Returns (hits, error). hits=None means 'read the CSV'."""
+        mode = self._input_mode()
+
+        if mode == INPUT_CSV:
+            if self._input_path is None or not self._input_path.exists():
+                return None, "Choose the Chartink CSV export first."
+            return None, ""
+
+        if mode == INPUT_TXT:
+            if self._input_path is None or not self._input_path.exists():
+                return None, "Choose a text file of symbols first."
+            hits, rejected = load_symbol_file(self._input_path)
+            if not hits:
+                return None, f"No usable symbols found in {self._input_path.name}."
+            self._warn_rejected(rejected)
+            return hits, ""
+
+        hits, rejected = hits_from_text(self.manual_box.toPlainText())
+        if not hits:
+            return None, "Type at least one symbol."
+        self._warn_rejected(rejected)
+        return hits, ""
+
+    def _warn_rejected(self, rejected: list[str]) -> None:
+        if rejected:
+            self._add_banner(
+                "warning",
+                f"Ignored {len(rejected)} entry/entries that do not look like NSE symbols: "
+                + ", ".join(rejected[:10]),
+            )
+
+    def _ensure_kite_token(self) -> bool:
+        check = check_token()
+        if check.ok or check.state in (TokenState.NO_API_KEY, TokenState.LIBRARY_MISSING):
+            return True
+
+        answer = QMessageBox.question(
+            self,
+            "Kite login required",
+            f"{check.message}\n\nOpen the Zerodha login page and paste the redirect URL back?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return True
+
+        url = build_login_url()
+        if url:
+            webbrowser.open(url)
+        redirect, ok = QInputDialog.getText(
+            self, "Kite login", "Paste the full URL you were redirected to after logging in:"
+        )
+        if ok and redirect.strip():
+            outcome = complete_login(redirect.strip())
+            if not outcome.ok:
+                self._add_banner("warning", outcome.message)
+        return True
+
+    def _on_toggle(self) -> None:
+        """Toggles change arithmetic only - re-score, never re-evaluate or re-fetch."""
+        self.summary.setText(summary_line(self._toggles()))
+        if self._result is not None:
+            self._render(rerun_banners=False)
+
+    def _on_thresholds_changed(self) -> None:
+        """Thresholds change the verdicts themselves - re-evaluate against cached data."""
+        if self._result is None:
+            return
+        reevaluate(self._result)
+        self._render(rerun_banners=False)
+        self.tabs.setCurrentIndex(0)
+
+    # ----------------------------------------------------------------- rendering
+
+    def _on_leadership_changed(self) -> None:
+        """Reference data or a breadth setting changed - re-resolve and re-highlight.
+
+        Resolution is re-run here as well as after a screening run, because a refreshed
+        reference export can classify stocks that were previously Unresolved.
+        """
+        self.sector_ranks_tab.run_tests(self.leadership_tab.reference())
+        if self._result is not None:
+            self._resolve_classifications()
+            self._render_table(self._toggles())
+
+    def _resolve_classifications(self) -> None:
+        """Resolve every tracked symbol, whatever path it arrived by.
+
+        The Chartink CSV carries no Sector/Industry, so CSV-imported stocks need this
+        exactly as much as typed or text-file ones. One code path for all three.
+        """
+        symbols = [s.symbol for s in self._result.stocks] if self._result else []
+        self._classification.resolve(symbols, self.leadership_tab.reference())
+
+    def _render(self, rerun_banners: bool = True) -> None:
+        if self._result is None:
+            return
+        toggles = self._toggles()
+        self._ranked = score_all(self._result.stocks, toggles)
+        self._resolve_classifications()
+
+        if rerun_banners:
+            self._render_banners(self._result.context)
+
+        context = self._result.context
+        as_of = context.as_of_trading_day or context.run_at
+        self.status.setText(
+            f"Run {context.run_at:%d %b %Y} - data as of {as_of:%d %b %Y}. "
+            f"Stage 1 supplied {context.stage1_count}; {len(self._ranked)} scored."
+        )
+        self.summary.setText(summary_line(toggles))
+        self._render_table(toggles)
+        self._render_cards(toggles)
+    
+    def _render_table_only(self) -> None:
+        if self._result is not None:
+            self._render_table(self._toggles())
+
+    def _render_banners(self, context: RunContext) -> None:
+        self._clear_banners()
+        for warning in context.warnings:
+            self._add_banner(warning.severity, warning.message)
+
+    def _clear_banners(self) -> None:
+        while self.banner_box.count():
+            item = self.banner_box.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+    def _add_banner(self, severity: str, message: str) -> None:
+        label = QLabel(message)
+        label.setWordWrap(True)
+        label.setStyleSheet(SEVERITY_STYLE.get(severity, SEVERITY_STYLE["info"]))
+        self.banner_box.addWidget(label)
+
+    def _render_table(self, toggles: dict[str, bool]) -> None:
+        show_p8 = self._show_p8()
+        self.table.blockSignals(True)
+        self.table.setRowCount(len(self._ranked))
+
+        # The overlay checkbox now governs the sector-leader column only. Leadership is a
+        # single checkable fact - top 3 by market cap in the stock's own industry - so the
+        # breadth machinery is no longer in the row-highlight path.
+        overlay = self._sector_overlay_on()
+        self.table.setColumnHidden(COL_LEADER, not overlay)
+
+        for row, stock in enumerate(self._ranked):
+            flags = "; ".join(
+                f.message for f in stock.all_flags
+                if f.severity in ("risk", "positive") and (show_p8 or f.param_id != P8_ID)
+            )
+            classification = self._classification.get(stock.symbol)
+            unresolved = overlay and not classification.resolved
+            company = self._company_for(stock.symbol)
+
+            # Peer ranking: where this stock sits among its subsector and sector on
+            # returns and growth. Replaces the old top-3 flag, which was blank for almost
+            # every stock and returned nothing at all for smaller names.
+            industry = getattr(company, "industry", "") or classification.industry or stock.industry
+            ranking = rank_symbol(self.leadership_tab.reference(), stock.symbol)
+            market_cap = getattr(company, "market_cap_cr", None)
+            cap = (
+                (self._universe.cap_for(company.name if company else stock.symbol)
+                 if self._universe else "")
+                or cap_category(market_cap, self.leadership_tab.reference())
+            )
+            leader = overlay and ranking.available and _is_top(ranking)
+
+            verdicts = {pid: r.verdict.label for pid, r in stock.results.items()}
+            hits = sum(1 for pid in PARAM_IDS if toggles.get(pid, True) and verdicts.get(pid) == "YES")
+
+            values = [
+                stock.symbol,
+                cap or "-",
+                ("Unresolved" if unresolved and not industry else industry) or "-",
+                f"{hits} of {sum(1 for p in PARAM_IDS if toggles.get(p, True))}",
+                parameter_badges(verdicts, toggles),
+                f"{stock.score_display}  ({stock.pct_of_max:.0f}%)",
+                stock.tier.value,
+                (ranking.summary() if overlay else "") or "-",
+                "",  # watchlist combo goes here
+                self._headline(stock) or "-",
+                self._describe(stock),
+                flags,
+            ]
+            for col, value in enumerate(values):
+                if col == COL_WATCH:
+                    continue
+                item = QTableWidgetItem(value)
+                if col == COL_TIER:
+                    item.setForeground(QColor(TIER_COLOURS[stock.tier]))
+                    font = item.font()
+                    font.setBold(True)
+                    item.setFont(font)
+                if col == COL_HIT:
+                    item.setForeground(QColor("#1b5e20"))
+                    font = item.font()
+                    font.setBold(True)
+                    item.setFont(font)
+                if leader:
+                    item.setBackground(LEADER_BG)
+                    item.setForeground(LEADER_FG)
+                    if col in (0, COL_LEADER):
+                        item.setToolTip("\n".join(ranking.table()))
+                elif unresolved and not industry:
+                    item.setBackground(UNRESOLVED_BG)
+                    item.setForeground(UNRESOLVED_FG)
+                    if col in (0, COL_INDUSTRY):
+                        item.setToolTip(
+                            "Industry unknown - not found in the sector reference export and "
+                            "not supplied by Screener.in, so no leadership check is possible."
+                        )
+                if col == COL_DESC:
+                    item.setToolTip(self._describe(stock, full=True))
+                if col == COL_POSITIVE:
+                    item.setToolTip(value)
+                if col == COL_LEADER and ranking.available:
+                    item.setToolTip("\n".join(ranking.table()))
+                self.table.setItem(row, col, item)
+
+            self.table.setCellWidget(row, COL_WATCH, self._watch_widget(stock))
+
+        self.table.blockSignals(False)
+        self._fit_rows()
+        if self._ranked:
+            self.table.selectRow(0)
+        self._report_unresolved()
+
+    def _fit_rows(self) -> None:
+        """Size every row to its tallest cell so no takeaway is clipped.
+
+        resizeRowsToContents alone under-measures a wrapped cell whose column was resized
+        after the item was set, so the description height is computed explicitly from the
+        line count and used as a floor.
+        """
+        self.table.resizeRowsToContents()
+        metrics = self.table.fontMetrics()
+        line_height = metrics.lineSpacing()
+
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, COL_DESC)
+            lines = item.text().count("\n") + 1 if item else 1
+            needed = lines * line_height + 10
+            if self.table.rowHeight(row) < needed:
+                self.table.setRowHeight(row, needed)
+
+    def _leader_tooltip(self, industry: str, rank: int | None, total: int | None) -> str:
+        entry = self.leadership_tab.entry_for(industry)
+        if entry is None or entry.breadth_pct is None:
+            return f"Ranked #{rank} of {total} scored in {industry}."
+        trend = f" ({entry.trend.label})" if entry.trend.label != "insufficient history" else ""
+        return (
+            f"Industry breadth {entry.breadth_pct:.0f}%{trend} - "
+            f"ranked #{rank} of {total} scored in this Industry."
+        )
+
+    def _report_unresolved(self) -> None:
+        if not self._sector_overlay_on() or not self.leadership_tab.has_reference():
+            self.unresolved_label.setVisible(False)
+            return
+
+        unresolved = [
+            s.symbol for s in self._ranked if not self._classification.get(s.symbol).resolved
+        ]
+        if not unresolved:
+            self.unresolved_label.setVisible(False)
+            return
+
+        self.unresolved_label.setText(
+            f"{len(unresolved)} stock(s) unresolved against the sector reference export and "
+            f"excluded from leadership highlighting: {', '.join(unresolved[:12])}"
+            + (" ..." if len(unresolved) > 12 else "")
+        )
+        self.unresolved_label.setVisible(True)
+
+    def _watch_widget(self, stock: ScoredStock) -> QWidget:
+        combo = QComboBox()
+        for state in (WatchState.NONE, WatchState.WATCHING, WatchState.REMOVED):
+            combo.addItem(state.label, state)
+        current = self._watchlist.state_of(stock.symbol)
+        combo.setCurrentIndex(combo.findData(current))
+        combo.currentIndexChanged.connect(
+            lambda _i, s=stock, c=combo: self._on_watch_changed(s, c.currentData())
+        )
+        return combo
+
+    def _on_watch_changed(self, stock: ScoredStock, state: WatchState) -> None:
+        self._watchlist.set_state(
+            stock.symbol, state, tier=stock.tier.value, score=stock.score_display
+        )
+        self._watchlist.save()
+        self.watchlist_tab.refresh()
+
+    def _company_for(self, symbol: str):
+        if self._result is None or self._result.store is None:
+            return None
+        return self._result.store.get(symbol)
+
+    def _headline(self, stock: ScoredStock) -> str:
+        """The single biggest positive: strongest concall takeaway, else Key Points."""
+        company = self._company_for(stock.symbol)
+        if company is None:
+            return ""
+        positives = []
+        if company.concall_summary:
+            positives = [t.pointer for t in extract_takeaways(company.concall_summary).positives]
+        return headline_positive(positives, list(company.key_points or []), company.about or "")
+
+    def _describe(self, stock: ScoredStock, full: bool = False) -> str:
+        """Concall takeaways and business USP, quoted from Screener.in.
+
+        Sentences come from Screener's own summary; only the positive/negative split is
+        inferred here, by keyword matching. The detail card keeps the transcript link so
+        the classification can be checked against the source.
+        """
+        company = self._result.store.get(stock.symbol) if self._result and self._result.store else None
+        if company is None:
+            return ""
+
+        lines: list[str] = []
+        if company.concall_summary:
+            takeaways = extract_takeaways(company.concall_summary)
+            if not takeaways.empty:
+                header = f"Concall {company.concall_date}".strip()
+                lines.append(f"{header} - {len(takeaways.positives)} positive, "
+                             f"{len(takeaways.negatives)} negative:")
+                lines.extend(takeaways.as_pointers())
+
+        if not lines:
+            if company.key_points:
+                lines.append("USP: " + " ".join(company.key_points[:2]))
+            elif company.about:
+                lines.append(company.about[:220])
+            else:
+                return "no Screener.in concall summary available"
+
+        if full and company.about:
+            lines.append("")
+            lines.append(company.about[:400])
+        return "\n".join(lines)
+
+    def _render_cards(self, toggles: dict[str, bool], row: int = 0) -> None:
+        """Detail for the selected stock, in the same format History and Watchlist use.
+
+        Every stock gets one, whatever its tier. Gating this at QUALITY GROWER meant
+        clicking a WATCHLIST or EXCLUDED row did nothing at all, which reads as the app
+        being broken rather than as a deliberate cut-off - and the reason a stock scored
+        badly is exactly what you want to read.
+        """
+        if not self._ranked:
+            self.cards.setPlainText("No stocks to show. Press Generate Results.")
+            return
+        row = row if 0 <= row < len(self._ranked) else 0
+        self.cards.setPlainText(self._detail_for(self._ranked[row], toggles))
+
+    def _detail_for(self, stock: ScoredStock, toggles: dict[str, bool]) -> str:
+        """One renderer shared with History and Watchlist, so the three cannot diverge."""
+        snapshot = snapshot_stock(
+            stock, toggles, self._company_for(stock.symbol), self.leadership_tab.reference()
+        )
+        text = format_snapshot_detail(
+            snapshot, self._runs.appearances(stock.symbol), self._runs.retention_days()
+        )
+
+        company = self._company_for(stock.symbol)
+        if company is not None and company.concall_links:
+            extra = ["", "Concall transcripts:"]
+            extra += [
+                f"    {date_label} {kind}: {url}"
+                for date_label, kind, url in company.concall_links[:3]
+            ]
+            text += "\n" + "\n".join(extra)
+        return text
+
+    def _on_cell_double_clicked(self, row: int, column: int) -> None:
+        """Double-clicking the Industry cell opens the manual classification dialog."""
+        if column != COL_INDUSTRY or not (0 <= row < len(self._ranked)):
+            return
+        from nse_screener.gui.classify_dialog import ClassifyDialog
+
+        symbol = self._ranked[row].symbol
+        if ClassifyDialog(symbol, self._classification, self.leadership_tab.reference(), self).exec():
+            self._resolve_classifications()
+            self._render_table(self._toggles())
+
+    def _on_row_selected(self) -> None:
+        rows = {i.row() for i in self.table.selectedIndexes()}
+        if len(rows) != 1:
+            return
+        row = rows.pop()
+        if 0 <= row < len(self._ranked):
+            self.cards.setPlainText(self._detail_for(self._ranked[row], self._toggles()))
+
+
+def main() -> int:
+    app = QApplication(sys.argv)
+    app.setApplicationName("NSE Two-Stage Screener")
+    window = ScreenerWindow()
+    window.show()
+    return app.exec()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

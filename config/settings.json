@@ -1,0 +1,150 @@
+{
+  "_comment": "Thresholds sourced from spec section 3 unless marked CONFIRMED-IN-CHAT (values the spec left open, decided by the user on 2026-07-27).",
+
+  "paths": {
+    "chartink_csv": "data/stage1/VOLUME SCAN.csv",
+    "fundamentals_dir": "data/fundamentals",
+    "sector_index_csv": "data/nse/sector_index_valuation.csv",
+    "sector_reference_dir": "data/sector_reference",
+    "sector_universe_dir": "data/sector_universe"
+  },
+
+  "sector_leadership": {
+    "_note": "Breadth of fundamental improvement across each Industry. An EARLY SIGNAL of a re-rating already visible in the financials - never a prediction. Never folded into the P1-P7 core score or any tier.",
+    "min_companies": 8,
+    "leadership_aligned_min_pct": 60.0,
+    "watch_min_pct": 40.0,
+    "conditions": {
+      "sales_growth_3y": { "enabled": true, "min": 10.0 },
+      "profit_growth_3y": { "enabled": true, "min": 10.0 },
+      "opm_expanding": { "enabled": true },
+      "roce": { "enabled": true, "min": 12.0 }
+    }
+  },
+
+  "screener": {
+    "_note": "Screener.in rate-limits on a short rolling window. Unpaced, a 20-stock run gets HTTP 429 on everything after roughly the first eight. Raise min_request_interval_s if 429s still appear.",
+    "min_request_interval_s": 1.2,
+    "max_retries": 4
+  },
+
+  "stage2": {
+    "source": "live",
+    "_source_options": ["live", "local"],
+    "_source_note": "live = fetch from Screener.in with the stored login. local = read a previously-saved export from paths.fundamentals_dir. Live is the default at the user's direction; local remains the fallback when scraped selectors break.",
+    "consolidated": true
+  },
+
+  "stage1": {
+    "_ingestion_note": "Manual Chartink CSV upload only. The scripted POST to /screener/process was removed at the user's direction.",
+    "min_close": 30,
+    "min_pct_change": 6.5,
+    "volume_sma_multiple": 3,
+    "min_volume_sma_50": 25000,
+    "min_volume": 50000,
+    "min_promoter_holding_pct": 50,
+    "max_debt_to_equity": 1.25
+  },
+
+  "staleness": {
+    "fundamentals_max_age_days": 100
+  },
+
+  "market_cap": {
+    "_note": "SEBI classifies by RANK (top 100 large, next 150 mid, rest small), not by an absolute figure. When the bulk sector reference export is loaded the true rank is used; the *_cr thresholds are the fallback and will disagree at the boundaries.",
+    "use_rank_when_available": true,
+    "min_universe_for_rank": 250,
+    "large_cap_rank": 100,
+    "mid_cap_rank": 250,
+    "large_cap_cr": 20000,
+    "mid_cap_cr": 5000,
+    "micro_cap_cr": 500
+  },
+
+  "p8_peer_rank": {
+    "_note": "P8 reports where a stock stands among sector and subsector peers on 1-year price return. Never scored - the bands only colour the badge; the exact rank is in the detail.",
+    "top_band_pct": 25.0,
+    "mid_band_pct": 50.0
+  },
+
+  "leaderboard": {
+    "_note": "Sectors and subsectors ranked by MEDIAN 6-month share price return of their constituents. Median resists one multi-bagger carrying a flat sector. Groups below min_constituents are excluded rather than allowed to win on a handful of names.",
+    "min_constituents": 5,
+    "_refresh_note": "Sector ranking is built from a quarterly bulk export, so it is prompted rather than scheduled. Being due never blocks - the last result stays on screen, marked stale.",
+    "refresh_every_days": 15
+  },
+
+  "history": {
+    "_note": "Rolling window of screening runs kept on disk. Older runs are pruned on save.",
+    "retention_days": 30
+  },
+
+  "p1_record_financials": {
+    "lookback_quarters": 20,
+    "revenue_cagr_min_pct": 12.0
+  },
+
+  "p2_capital_efficiency": {
+    "roce_min_pct": 15.0,
+    "roce_min_pct_capital_intensive": 10.0,
+    "roe_min_pct": 15.0,
+    "years_required": 4,
+    "years_window": 5,
+    "partial_band_low_pct": 12.0,
+    "partial_band_high_pct": 15.0,
+    "leverage_flag_roe_minus_roce_pp": 8.0,
+    "pricing_power_roce_pct": 25.0
+  },
+
+  "p3_fcf_quality": {
+    "years_window": 5,
+    "years_required_yes": 4,
+    "years_required_partial": 3,
+    "fcf_yield_min_pct": 2.0,
+    "fcf_yield_partial_low_pct": 1.0
+  },
+
+  "p4_earnings_quality": {
+    "cfo_pat_min": 0.8,
+    "years_required": 2,
+    "years_window": 3,
+    "partial_band_low": 0.6,
+    "receivable_days_yoy_flag_pct": 20.0
+  },
+
+  "p5_institutional": {
+    "lookback_quarters": 6,
+    "flat_tolerance_pct": 1.0,
+    "marquee_exit_drop_pct": 2.0
+  },
+
+  "p6_promoter": {
+    "holding_strong_pct": 50.0,
+    "stability_tolerance_pct": 2.0,
+    "single_quarter_drop_pct": 5.0,
+    "lookback_quarters": 4,
+    "pledge_risk_pct": 20.0
+  },
+
+  "p7_valuation": {
+    "_pegy_rule": "CONFIRMED-IN-CHAT: absolute PEGY <= 1.0. Spec said 'sector-index PE-derived benchmark' but NSE publishes no sector EPS growth, so no true sector PEGY is computable.",
+    "pegy_max": 1.0,
+    "pegy_max_high_growth": 1.5,
+    "high_growth_roce_pct": 20.0,
+    "_pb_band": "CONFIRMED-IN-CHAT: <= 1.25x the NSE sector index PB.",
+    "pb_sector_multiple_max": 1.25
+  },
+
+  "tiers": {
+    "_comment": "Percentage of ACTIVE maximum, never a fixed point total (spec section 4).",
+    "elite_compounder_min_pct": 90.0,
+    "quality_grower_min_pct": 70.0,
+    "watchlist_min_pct": 50.0
+  },
+
+  "kite": {
+    "api_key_env": "KITE_API_KEY",
+    "keyring_service": "nse-screener-kite",
+    "_credentials_note": "Never stored in this repo. Read from Windows Credential Manager via keyring, or from environment variables. See spec section 9."
+  }
+}
