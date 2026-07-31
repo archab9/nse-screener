@@ -63,6 +63,29 @@ Strength is the mean of the group's percentile position across the horizons it r
 because +40% means very different things over six months and five years. Horizons are
 equally weighted; any other weighting would be an unbacked judgement.
 
+### Where the list comes from
+
+The rows come from the **NSE classification**, not from your returns export. That
+separation matters: previously the tab was built only from the bulk export, so any sector
+the export didn't cover simply didn't exist as a row — which made it look like a five-row
+table no matter how the display was tuned.
+
+Harvest the complete taxonomy once (no login, one throttled walk, ~6 minutes):
+
+```bash
+python scriptsuild_nse_universe.py
+```
+
+That writes `data/sector_universe/nse_taxonomy.csv` — 22 sectors, 188 subsectors and
+~2,500 companies across the full NSE four-level tree (macro sector → sector → industry →
+basic industry), including every Nifty sector family: IT, FMCG, Financial Services,
+Healthcare, Auto, Metals, Oil & Gas, Realty, Power, Telecom. Re-run it when NSE revises
+the classification.
+
+You can also drop in a hand-made file with `Sector, Subsector, Stock Name,
+Market Cap Category` columns. If several files sit in the folder the one with the most
+rows wins, so the harvested universe beats a sample.
+
 **Every** sector and subsector is listed, always. Groups with fewer than the minimum
 constituent count are shown greyed and marked *(thin)* and cannot win a medal — a median
 over two names is not a sector view — but they are never hidden. Hiding them removed a

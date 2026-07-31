@@ -480,15 +480,23 @@ def _():
 
     tab = _win.sector_ranks_tab
     tab.run_tests()
+    from nse_screener.sector_universe import load_sector_universe
+
     reference = load_sector_reference()
-    sectors = {r.sector for r in reference.rows if r.sector}
-    subs = {r.subsector for r in reference.rows if r.subsector}
+    universe = load_sector_universe()
     board = tab.board()
-    # Every group in the export must appear - hiding thin ones removed a large share of
-    # the subsectors in a real export.
-    assert len(board.sectors) == len(sectors), (len(board.sectors), len(sectors))
-    assert len(board.subsectors) == len(subs), (len(board.subsectors), len(subs))
-    assert tab.table.rowCount() == len(sectors) + len(subs)
+
+    # The taxonomy decides the rows, not the export. Every sector and subsector the NSE
+    # classification knows about must be present, priced or not - being built only from
+    # the export is what made this look like a five-row table.
+    listed_sectors = {g.name for g in board.sectors}
+    listed_subs = {g.name for g in board.subsectors}
+    for name in universe.sectors:
+        assert name in listed_sectors, f"sector missing: {name}"
+    for name in universe.subsectors:
+        assert name in listed_subs, f"subsector missing: {name}"
+    assert tab.table.rowCount() == len(board.all_groups())
+    sectors, subs = listed_sectors, listed_subs
     headers = [tab.table.horizontalHeaderItem(i).text() for i in range(tab.table.columnCount())]
     for expected in ("6m return", "1y return", "3y return", "5y return", "Strength"):
         assert expected in headers, headers
@@ -501,8 +509,10 @@ def _():
     top = tab.table.item(0, 1).text()
     thin = sum(1 for g in board.all_groups() if g.thin)
     assert all(not g.medal for g in board.all_groups() if g.thin), "thin groups must not medal"
-    return (f"{tab.table.rowCount()} groups (all {len(sectors)} sectors + {len(subs)} "
-            f"subsectors, {thin} thin), strongest first: {top} ({strengths[0]})")
+    unpriced = sum(1 for g in board.all_groups() if not g.has_returns)
+    return (f"{tab.table.rowCount()} rows: {len(sectors)} sectors + {len(subs)} subsectors "
+            f"(universe has {len(universe.sectors)}/{len(universe.subsectors)}), "
+            f"{unpriced} unpriced, {thin} thin; top {top} ({strengths[0]})")
 
 
 @check("GUI - dark theme applied with readable contrast")
