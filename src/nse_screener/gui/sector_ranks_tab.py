@@ -44,6 +44,7 @@ class SectorRanksTab(QWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._board = Leaderboards()
+        self._universe = None
         self._parents: dict[str, str] = {}
         self._rows = []
 
@@ -106,10 +107,17 @@ class SectorRanksTab(QWidget):
     def board(self) -> Leaderboards:
         return self._board
 
+    def set_universe(self, universe) -> None:
+        self._universe = universe
+
     def set_reference(self, reference) -> None:
-        self._board = build_leaderboards(reference)
+        self._board = build_leaderboards(reference, self._universe)
         # Subsector -> its sector, so the table can show the hierarchy.
         self._parents = {}
+        if self._universe is not None:
+            for c in self._universe.constituents:
+                if c.subsector and c.sector:
+                    self._parents.setdefault(c.subsector, c.sector)
         for row in getattr(reference, "rows", []) or []:
             if row.subsector and row.sector:
                 self._parents.setdefault(row.subsector, row.sector)
@@ -117,6 +125,8 @@ class SectorRanksTab(QWidget):
 
     def run_tests(self, reference=None) -> None:
         window = self.window()
+        if getattr(window, "_universe", None) is not None:
+            self.set_universe(window._universe)
         if reference is None and hasattr(window, "leadership_tab"):
             reference = window.leadership_tab.reference()
         self.set_reference(reference)
@@ -155,7 +165,9 @@ class SectorRanksTab(QWidget):
                 f"{group.medal} {group.name}".strip(),
                 group.level.capitalize(),
                 self._parent_of(group) or "-",
-                str(group.constituents) + (" (thin)" if group.thin else ""),
+                f"{group.constituents}"
+                + (f" ({group.with_returns} priced)" if group.with_returns < group.constituents else "")
+                + (" thin" if group.thin else ""),
             ]
             values += [group.horizon(key).display for key, _label in HORIZONS]
             values.append(group.strength_display)
@@ -168,7 +180,9 @@ class SectorRanksTab(QWidget):
                     font.setBold(True)
                     item.setFont(font)
                     item.setForeground(STRONG_FG if group.strength >= 50 else WEAK_FG)
-                if group.thin:
+                if not group.has_returns:
+                    item.setForeground(THIN_FG)
+                elif group.thin:
                     item.setForeground(THIN_FG)
                     font = item.font()
                     font.setItalic(True)
@@ -188,6 +202,7 @@ class SectorRanksTab(QWidget):
         self.status.setText(
             f"{len(self._rows)} group(s) shown, strongest first"
             + (f" - leading: {best.name} (strength {best.strength_display})" if best else "")
-            + f". {self._board.skipped_thin} marked thin (shown, but no medal)."
+            + f". {sum(1 for g in self._rows if not g.has_returns)} awaiting return data, "
+            f"{self._board.skipped_thin} thin."
         )
         self.status.setStyleSheet(theme.MUTED_LABEL)

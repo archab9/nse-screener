@@ -5,7 +5,8 @@
     "chartink_csv": "data/stage1/VOLUME SCAN.csv",
     "fundamentals_dir": "data/fundamentals",
     "sector_index_csv": "data/nse/sector_index_valuation.csv",
-    "sector_reference_dir": "data/sector_reference"
+    "sector_reference_dir": "data/sector_reference",
+    "sector_universe_dir": "data/sector_universe"
   },
 
   "sector_leadership": {

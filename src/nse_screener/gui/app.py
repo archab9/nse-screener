@@ -72,6 +72,7 @@ from nse_screener.gui.thresholds_tab import ThresholdsTab
 from nse_screener.gui.watchlist_tab import WatchlistTab
 from nse_screener.run_history import RunHistory, snapshot_stock
 from nse_screener.sector_history import SectorHistory
+from nse_screener.sector_universe import load_sector_universe
 from nse_screener.market.kite import TokenState, build_login_url, check_token, complete_login
 from nse_screener.models import P8_ID, PARAM_IDS, PARAM_NAMES, RunContext, ScoredStock, Tier
 from nse_screener.pipeline import LIVE, LOCAL, PipelineResult, reevaluate, run_pipeline
@@ -142,6 +143,12 @@ class ScreenerWindow(QMainWindow):
         self._history = SectorHistory.load()
         self._classification = ClassificationStore.load()
         self._runs = RunHistory.load()
+        # The NSE classification: what sectors and subsectors EXIST, independent of
+        # whatever the bulk export happens to price.
+        try:
+            self._universe = load_sector_universe()
+        except Exception:
+            self._universe = None
 
         self.tabs = QTabWidget()
         self.setCentralWidget(self.tabs)
@@ -169,6 +176,7 @@ class ScreenerWindow(QMainWindow):
 
         # One leaderboard, computed on the Sector Ranks tab and shared with the two views
         # that need medals and the trophy.
+        self.sector_ranks_tab.set_universe(self._universe)
         self.sector_ranks_tab.set_reference(self.leadership_tab.reference())
         board = self.sector_ranks_tab.board()
         self.history_tab.set_board(board)
@@ -701,7 +709,11 @@ class ScreenerWindow(QMainWindow):
             industry = getattr(company, "industry", "") or classification.industry or stock.industry
             ranking = rank_symbol(self.leadership_tab.reference(), stock.symbol)
             market_cap = getattr(company, "market_cap_cr", None)
-            cap = cap_category(market_cap, self.leadership_tab.reference())
+            cap = (
+                (self._universe.cap_for(company.name if company else stock.symbol)
+                 if self._universe else "")
+                or cap_category(market_cap, self.leadership_tab.reference())
+            )
             leader = overlay and ranking.available and _is_top(ranking)
 
             verdicts = {pid: r.verdict.label for pid, r in stock.results.items()}

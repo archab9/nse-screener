@@ -6,9 +6,13 @@ of its constituents over 6 months, 1, 3 and 5 years, plus an overall strength sc
 Median rather than mean deliberately: one multi-bagger should not carry an otherwise flat
 sector, and the question is whether the group as a whole is moving.
 
-EVERY group is listed. Groups with fewer than min_constituents companies are marked thin
-and barred from medals - a median over two names is not a sector view - but they are never
-hidden. Dropping them silently removed a large share of the subsectors in a real export.
+EVERY sector and subsector in the NSE classification is listed, always. The universe file
+decides which rows exist; the bulk export only supplies returns. A group the export says
+nothing about is shown with blank returns rather than vanishing - which is what previously
+made this look like a five-row table.
+
+Groups with fewer than min_constituents companies are marked thin and barred from medals -
+a median over two names is not a sector view - but they are never hidden.
 
 Strength score is the mean of the group's percentile position across the horizons it
 reports, on a 0-100 scale where 100 is the best group in the market. Horizons are equally
@@ -77,7 +81,12 @@ class GroupPerformance:
     strength: float | None = None
     rank: int = 0
     medal: str = ""
-    thin: bool = False      # too few constituents for the median to mean much
+    thin: bool = False          # too few constituents with returns to mean much
+    with_returns: int = 0       # how many constituents the export actually priced
+
+    @property
+    def has_returns(self) -> bool:
+        return self.with_returns > 0
 
     def horizon(self, key: str) -> HorizonResult:
         return self.horizons.get(key, HorizonResult())
@@ -104,6 +113,7 @@ class Leaderboards:
     subsectors: list[GroupPerformance] = field(default_factory=list)
     skipped_thin: int = 0
     available: bool = False
+    priced: bool = False    # at least one group had return data
 
     def all_groups(self) -> list[GroupPerformance]:
         return self.sectors + self.subsectors
@@ -141,7 +151,8 @@ class Leaderboards:
         )
 
 
-def _build_level(buckets: dict[str, dict[str, list[float]]], level: str, minimum: int
+def _build_level(buckets: dict[str, dict[str, list[float]]], level: str, minimum: int,
+                 universe_sizes: dict[str, int] | None = None
                  ) -> tuple[list[GroupPerformance], int]:
     groups: list[GroupPerformance] = []
     skipped = 0
@@ -149,14 +160,20 @@ def _build_level(buckets: dict[str, dict[str, list[float]]], level: str, minimum
     for name, by_horizon in buckets.items():
         if not name:
             continue
-        size = max((len(v) for v in by_horizon.values()), default=0)
-        if size == 0:
-            # No return figure on any horizon: there is nothing to rank, as distinct from
-            # a group that reports few but real numbers.
+        with_returns = max((len(v) for v in by_horizon.values()), default=0)
+        # Constituent count comes from the classification when we have it, so a group
+        # still shows its true size even if the export covers none of its members.
+        in_universe = name in (universe_sizes or {})
+        if with_returns == 0 and not in_universe:
+            # Nothing to rank and nothing saying the group exists. Distinct from a group
+            # the classification lists but the export has not priced, which stays.
             continue
-        thin = size < minimum
+        size = (universe_sizes or {}).get(name, with_returns)
+        thin = with_returns < minimum
         skipped += thin
-        group = GroupPerformance(name=name, level=level, constituents=size, thin=thin)
+        group = GroupPerformance(
+            name=name, level=level, constituents=size, thin=thin, with_returns=with_returns
+        )
         for key, _label in HORIZONS:
             values = by_horizon.get(key) or []
             if values:
@@ -203,16 +220,26 @@ def _build_level(buckets: dict[str, dict[str, list[float]]], level: str, minimum
     return groups, skipped
 
 
-def build_leaderboards(reference: SectorReference | None) -> Leaderboards:
+def build_leaderboards(reference: SectorReference | None, universe=None) -> Leaderboards:
+    """`universe` is the NSE classification: it decides which groups exist. `reference` is
+    the bulk export: it supplies returns for whichever of them it covers."""
     board = Leaderboards()
-    if reference is None:
+    if reference is None and universe is None:
         return board
 
     minimum = int(settings().get("leaderboard", {}).get("min_constituents", 5))
     sector_buckets: dict[str, dict[str, list[float]]] = {}
     subsector_buckets: dict[str, dict[str, list[float]]] = {}
 
-    for row in reference.rows:
+    # Seed every group the classification knows about, so none can be missing from the
+    # table just because the export happens not to cover it.
+    if universe is not None:
+        for name in universe.sectors:
+            sector_buckets.setdefault(name, {})
+        for name in universe.subsectors:
+            subsector_buckets.setdefault(name, {})
+
+    for row in (reference.rows if reference is not None else []):
         for bucket, name in ((sector_buckets, row.sector), (subsector_buckets, row.subsector)):
             if not name:
                 continue
@@ -222,10 +249,20 @@ def build_leaderboards(reference: SectorReference | None) -> Leaderboards:
                 if value is not None:
                     slot.setdefault(key, []).append(value)
 
-    board.sectors, skipped_a = _build_level(sector_buckets, SECTOR, minimum)
-    board.subsectors, skipped_b = _build_level(subsector_buckets, SUBSECTOR, minimum)
+    sizes = {}
+    if universe is not None:
+        sizes[SECTOR] = {n: universe.size(SECTOR, n) for n in universe.sectors}
+        sizes[SUBSECTOR] = {n: universe.size(SUBSECTOR, n) for n in universe.subsectors}
+
+    board.sectors, skipped_a = _build_level(
+        sector_buckets, SECTOR, minimum, sizes.get(SECTOR, {})
+    )
+    board.subsectors, skipped_b = _build_level(
+        subsector_buckets, SUBSECTOR, minimum, sizes.get(SUBSECTOR, {})
+    )
     board.skipped_thin = skipped_a + skipped_b
     board.available = bool(board.sectors or board.subsectors)
+    board.priced = any(g.has_returns for g in board.all_groups())
     return board
 
 
