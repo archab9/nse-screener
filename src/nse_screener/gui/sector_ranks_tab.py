@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from nse_screener.analysis_state import AnalysisState
 from nse_screener.gui import theme
 from nse_screener.leaderboard import HORIZONS, Leaderboards, build_leaderboards
 
@@ -44,6 +45,7 @@ class SectorRanksTab(QWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._board = Leaderboards()
+        self._state = AnalysisState.load()
         self._universe = None
         self._parents: dict[str, str] = {}
         self._rows = []
@@ -63,7 +65,21 @@ class SectorRanksTab(QWidget):
         blurb.setStyleSheet(theme.BANNER["info"])
         outer.addWidget(blurb)
 
+        self.refresh_banner = QLabel()
+        self.refresh_banner.setWordWrap(True)
+        outer.addWidget(self.refresh_banner)
+
         controls = QHBoxLayout()
+        self.refresh_button = QPushButton("Refresh ranking analysis")
+        self.refresh_button.setMinimumHeight(32)
+        self.refresh_button.setToolTip(
+            "Re-read the bulk export and rebuild every sector and subsector ranking. "
+            f"Prompted every {AnalysisState.interval_days()} days - the numbers only move "
+            "when you refresh the export."
+        )
+        self.refresh_button.clicked.connect(self.refresh_analysis)
+        controls.addWidget(self.refresh_button)
+
         controls.addWidget(QLabel("Show:"))
         self.level_combo = QComboBox()
         self.level_combo.addItem("Sectors and subsectors", ALL)
@@ -101,6 +117,7 @@ class SectorRanksTab(QWidget):
         outer.addWidget(self.table, stretch=1)
 
         self._render()
+        self._render_refresh_banner()
 
     # ------------------------------------------------------------------- data
 
@@ -113,6 +130,7 @@ class SectorRanksTab(QWidget):
     def set_reference(self, reference) -> None:
         self._board = build_leaderboards(reference, self._universe)
         # Subsector -> its sector, so the table can show the hierarchy.
+        self._render_refresh_banner()
         self._parents = {}
         if self._universe is not None:
             for c in self._universe.constituents:
@@ -122,6 +140,32 @@ class SectorRanksTab(QWidget):
             if row.subsector and row.sector:
                 self._parents.setdefault(row.subsector, row.sector)
         self._render()
+
+    def refresh_analysis(self) -> None:
+        """The Refresh button. Rebuilds the ranking and stamps the run."""
+        self.run_tests()
+        self._state.record(self._board)
+        self._state.save()
+        self._render_refresh_banner()
+
+    def _render_refresh_banner(self) -> None:
+        due = self._state.is_due()
+        missing = sum(1 for g in self._board.all_groups() if not g.has_returns)
+        text = self._state.status()
+
+        if missing and self._board.available:
+            text += (
+                f"\n\n{missing} group(s) have no return figures. Returns come from the bulk "
+                "Screener.in export, not from the classification: run one screen with a broad "
+                "condition (e.g. Market Capitalization > 100), add the columns "
+                "'Return over 6months', 'Return over 1year', 'Return over 3years', "
+                "'Return over 5years', Sector, Industry, Basic Industry and the NSE code, "
+                "export to CSV and drop it in data/sector_reference/."
+            )
+        self.refresh_banner.setText(text)
+        self.refresh_banner.setStyleSheet(
+            theme.BANNER["warning"] if (due or missing) else theme.BANNER["good"]
+        )
 
     def run_tests(self, reference=None) -> None:
         window = self.window()

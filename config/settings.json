@@ -69,7 +69,9 @@
 
   "leaderboard": {
     "_note": "Sectors and subsectors ranked by MEDIAN 6-month share price return of their constituents. Median resists one multi-bagger carrying a flat sector. Groups below min_constituents are excluded rather than allowed to win on a handful of names.",
-    "min_constituents": 5
+    "min_constituents": 5,
+    "_refresh_note": "Sector ranking is built from a quarterly bulk export, so it is prompted rather than scheduled. Being due never blocks - the last result stays on screen, marked stale.",
+    "refresh_every_days": 15
   },
 
   "history": {

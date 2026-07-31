@@ -97,6 +97,27 @@ sectors, or among subsectors, so the two sequences are independent.
 
 Gold, silver and bronze go to the top three of each level on the six-month horizon.
 
+### Refresh
+
+**Refresh ranking analysis** at the top of the tab rebuilds every sector and subsector
+ranking and stamps the run. It is prompted every **15 days** — the banner says how old the
+numbers are and turns amber when due. Being due never blocks: the previous result stays on
+screen, marked stale.
+
+### Returns need the bulk export
+
+The taxonomy tells the app which sectors exist; it carries **no return figures**. Those
+come from one bulk Screener.in screen, and until you run it most rows show blanks — the
+banner names exactly how many.
+
+Run one screen with a broad condition (`Market Capitalization > 100`), add these columns
+via Edit Columns, export to CSV and drop it in `data/sector_reference/`:
+
+`Return over 6months` · `Return over 1year` · `Return over 3years` · `Return over 5years`
+· `Sector` · `Industry` · `Basic Industry` · `NSE Code`
+
+One export covers the whole market, so every group fills in at once. Repeat quarterly.
+
 ## Peer rank and market cap
 
 Every stock on every tab carries two extra columns:
